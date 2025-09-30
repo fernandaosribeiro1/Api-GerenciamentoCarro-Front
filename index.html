@@ -1,0 +1,926 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>API Gerenciamento de Carros</title>
+    <!-- Carrega o Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        // Configuração do Tailwind com paleta de cores mais profissional (Teal/Slate)
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'primary': '#0d9488', // Teal-600
+                        'secondary': '#475569', // Slate-600
+                        'success': '#10b981', // Emerald-500
+                        'danger': '#ef4444', // Red-500
+                        'warning': '#f59e0b', // Amber-500
+                        'info': '#38bdf8', // Sky-400
+                        'background-light': '#f8fafc', // Slate-50
+                    },
+                }
+            }
+        }
+    </script>
+    <style>
+        /* Estilos adicionais para o Multi-Select e scroll suave */
+        .h-32 { height: 8rem; }
+        /* Scrollbar discreto */
+        .overflow-x-auto::-webkit-scrollbar {
+            height: 8px;
+        }
+        .overflow-x-auto::-webkit-scrollbar-thumb {
+            background-color: #cbd5e1;
+            border-radius: 10px;
+        }
+    </style>
+</head>
+<body class="bg-background-light min-h-screen text-slate-800">
+
+    <!-- Container Principal da Aplicação -->
+    <div id="app" class="max-w-7xl mx-auto p-4 sm:p-6 lg:p-8">
+        
+        <!-- Navbar / Navegação Global -->
+        <nav class="bg-white shadow-lg rounded-lg mb-8 p-4 flex flex-col sm:flex-row justify-between items-center space-y-4 sm:space-y-0 border-b-4 border-primary">
+            <h1 class="text-3xl font-extrabold text-slate-800">Gerenciamento de Frota</h1>
+            <div class="flex flex-wrap gap-3">
+                <button onclick="router('acessorios')" class="nav-button bg-primary hover:bg-teal-700 text-white font-semibold py-2 px-4 rounded-lg transition duration-150 shadow-md">Acessórios</button>
+                <button onclick="router('carros')" class="nav-button bg-secondary hover:bg-slate-700 text-white font-semibold py-2 px-4 rounded-lg transition duration-150 shadow-md">Carros</button>
+                <button onclick="router('fabricantes')" class="nav-button bg-secondary hover:bg-slate-700 text-white font-semibold py-2 px-4 rounded-lg transition duration-150 shadow-md">Fabricantes</button>
+            </div>
+        </nav>
+
+        <!-- Área de Conteúdo (onde as views serão renderizadas) -->
+        <main id="content" class="bg-white p-6 rounded-lg shadow-xl min-h-[60vh]">
+            <div class="text-center text-slate-500 mt-20">
+                Selecione uma entidade no menu acima para começar a gerenciar.
+            </div>
+        </main>
+
+        <!-- Componente de Modal para Mensagens/Confirmações (Substitui alert/confirm) -->
+        <div id="custom-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50 p-4">
+            <div class="bg-white rounded-xl p-6 shadow-2xl w-full max-w-md">
+                <h3 id="modal-title" class="text-xl font-bold mb-4 text-slate-800">Título</h3>
+                <p id="modal-body" class="mb-6 text-slate-600">Corpo da mensagem.</p>
+                <div id="modal-actions" class="flex justify-end space-x-3">
+                    <button id="modal-cancel" class="py-2 px-4 bg-gray-300 text-slate-800 rounded-lg hover:bg-gray-400 transition font-medium">Cancelar</button>
+                    <button id="modal-confirm" class="py-2 px-4 bg-danger text-white rounded-lg hover:bg-red-600 transition font-medium">Confirmar</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Componente de Notificação (Toast) -->
+        <div id="toast-container" class="fixed bottom-5 right-5 z-50 space-y-2">
+            <!-- Toasts serão injetados aqui -->
+        </div>
+    </div>
+
+    <!-- Lógica JavaScript da Aplicação -->
+    <script>
+        // --- 1. CONFIGURAÇÕES GLOBAIS ---
+        const API_BASE_URL = 'https://api-gerenciamentocarro-lais.onrender.com'; // Configure o endereço da sua API aqui!
+        const MAX_RETRIES = 3;
+        const state = {
+            currentView: '', // 'acessorios', 'carros', 'fabricantes'
+            mode: 'list',    // 'list' ou 'form'
+            data: null,      // Dados para listagem ou objeto para edição
+            entityId: null,  // ID da entidade em edição
+            currentPage: 0,
+            totalPages: 1,
+            // Cache para selects de relacionamento
+            carros: [],
+            fabricantes: []
+        };
+
+        // --- 2. SERVIÇO DE API COM EXPONENTIAL BACKOFF ---
+
+        /**
+         * Realiza chamadas à API com lógica de retry.
+         * @param {string} url - A URL completa da API.
+         * @param {object} options - Opções do fetch (method, headers, body).
+         * @returns {Promise<any>} A resposta JSON.
+         */
+        async function apiFetch(url, options = {}, retries = 0) {
+            try {
+                const response = await fetch(url, options);
+
+                if (response.status === 204) {
+                    return null; // No Content
+                }
+
+                const contentType = response.headers.get("content-type");
+                let data = null;
+
+                if (contentType && contentType.indexOf("application/json") !== -1) {
+                    data = await response.json();
+                } else if (contentType && contentType.indexOf("text/plain") !== -1) {
+                    // Se for 409, pode retornar um texto simples de erro.
+                    data = await response.text();
+                } else {
+                    data = {};
+                }
+
+                if (!response.ok) {
+                    // Trata o erro 409 retornando a mensagem de conflito
+                    if (response.status === 409) {
+                        throw new Error(data || "Conflito ao processar a requisição. Há itens vinculados.");
+                    }
+                    // Para outros erros HTTP, tenta obter a mensagem do JSON ou usa o status.
+                    throw new Error(`Erro ${response.status}: ${data?.message || response.statusText || data}`);
+                }
+                
+                return data;
+
+            } catch (error) {
+                if (retries < MAX_RETRIES) {
+                    const delay = Math.pow(2, retries) * 100; // 100ms, 200ms, 400ms...
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                    return apiFetch(url, options, retries + 1);
+                }
+                console.error("Erro fatal na API após retentativas:", error);
+                throw error;
+            }
+        }
+
+        // --- 3. GESTÃO DE UI E NOTIFICAÇÕES (Mantidas e Estilizadas) ---
+
+        /**
+         * Exibe uma notificação (toast) temporária.
+         * @param {string} message - A mensagem a ser exibida.
+         * @param {string} type - O tipo (success, danger, warning, info).
+         */
+        function showToast(message, type = 'info') {
+            const container = document.getElementById('toast-container');
+            const colorMap = {
+                success: 'bg-success',
+                danger: 'bg-danger',
+                warning: 'bg-warning text-slate-900',
+                info: 'bg-info'
+            };
+
+            const toast = document.createElement('div');
+            toast.className = `p-4 rounded-lg shadow-2xl text-white font-semibold ${colorMap[type]} transition-all duration-300 transform translate-x-0 opacity-100`;
+            toast.textContent = message;
+
+            container.appendChild(toast);
+
+            setTimeout(() => {
+                toast.classList.add('opacity-0', 'translate-x-full');
+                toast.addEventListener('transitionend', () => toast.remove());
+            }, 5000);
+        }
+
+        /**
+         * Exibe um modal de confirmação (substitui window.confirm).
+         */
+        function showConfirmationModal(title, body, onConfirm) {
+            const modal = document.getElementById('custom-modal');
+            document.getElementById('modal-title').textContent = title;
+            document.getElementById('modal-body').textContent = body;
+            
+            const confirmBtn = document.getElementById('modal-confirm');
+            const cancelBtn = document.getElementById('modal-cancel');
+
+            // Limpa listeners anteriores
+            confirmBtn.replaceWith(confirmBtn.cloneNode(true));
+            cancelBtn.replaceWith(cancelBtn.cloneNode(true));
+            
+            const newConfirmBtn = document.getElementById('modal-confirm');
+            const newCancelBtn = document.getElementById('modal-cancel');
+
+            newConfirmBtn.onclick = () => {
+                modal.classList.add('hidden');
+                onConfirm();
+            };
+
+            newCancelBtn.onclick = () => {
+                modal.classList.add('hidden');
+            };
+
+            modal.classList.remove('hidden');
+        }
+
+        // --- 4. FUNÇÕES DE NAVEGAÇÃO E ROTAS (Mantidas) ---
+
+        /**
+         * Altera a view principal da aplicação (o "roteador" simples).
+         */
+        function router(view, mode = 'list', id = null) {
+            state.currentView = view;
+            state.mode = mode;
+            state.entityId = id;
+            
+            // Atualiza o destaque na navbar
+            document.querySelectorAll('.nav-button').forEach(btn => {
+                btn.classList.remove('bg-primary', 'hover:bg-teal-700');
+                btn.classList.add('bg-secondary', 'hover:bg-slate-700');
+            });
+            document.querySelector(`[onclick="router('${view}')"]`).classList.add('bg-primary', 'hover:bg-teal-700');
+            document.querySelector(`[onclick="router('${view}')"]`).classList.remove('bg-secondary', 'hover:bg-slate-700');
+
+
+            switch (view) {
+                case 'acessorios':
+                    state.mode === 'list' ? renderAcessoriosList() : renderAcessorioForm();
+                    break;
+                case 'carros':
+                    state.mode === 'list' ? renderCarrosList() : renderCarroForm();
+                    break;
+                case 'fabricantes':
+                    state.mode === 'list' ? renderFabricantesList() : renderFabricanteForm();
+                    break;
+            }
+        }
+
+        // --- 5. LÓGICA DE DADOS (Cache) ---
+
+        /**
+         * Busca todos os carros para o select de Acessório.
+         */
+        async function fetchAllCarros() {
+            try {
+                const data = await apiFetch(`${API_BASE_URL}/carros`);
+                state.carros = data || [];
+            } catch (error) {
+                showToast("Erro ao carregar lista de Carros (cache).", 'danger');
+                state.carros = [];
+            }
+        }
+
+        /**
+         * Busca todos os fabricantes para o multi-select de Acessório.
+         */
+        async function fetchAllFabricantes() {
+            try {
+                const data = await apiFetch(`${API_BASE_URL}/fabricantes`);
+                state.fabricantes = data || [];
+            } catch (error) {
+                showToast("Erro ao carregar lista de Fabricantes (cache).", 'danger');
+                state.fabricantes = [];
+            }
+        }
+
+        // --- 6. VIEWS (ACESSÓRIOS - Mantidas) ---
+
+        async function renderAcessoriosList(page = 0) {
+            const content = document.getElementById('content');
+            
+            content.innerHTML = `
+                <h2 class="text-3xl font-bold mb-6 text-slate-800 border-b pb-2">Lista de Acessórios</h2>
+                <div class="flex flex-wrap gap-4 mb-6 items-center">
+                    <input type="text" id="acessorioSearchInput" placeholder="Buscar por nome, ano ou tempo" class="p-3 border border-gray-300 rounded-lg flex-grow min-w-40">
+                    <select id="acessorioSortSelect" class="p-3 border border-gray-300 rounded-lg">
+                        <option value="id">ID</option>
+                        <option value="nome">Nome</option>
+                        <option value="anoAquisicao">Ano de Aquisição</option>
+                        <option value="valor">Valor</option>
+                    </select>
+                    <select id="acessorioDirectionSelect" class="p-3 border border-gray-300 rounded-lg">
+                        <option value="asc">Crescente</option>
+                        <option value="desc">Decrescente</option>
+                    </select>
+                    <button onclick="fetchAcessorios(0)" class="bg-primary hover:bg-teal-700 text-white font-bold py-3 px-6 rounded-lg transition duration-150 shadow-md">Pesquisar</button>
+                    <button onclick="router('acessorios', 'form')" class="bg-success hover:bg-emerald-700 text-white font-bold py-3 px-6 rounded-lg transition duration-150 shadow-md ml-auto">Novo Acessório</button>
+                </div>
+                
+                <div id="acessoriosListContainer" class="overflow-x-auto">
+                    <div id="loadingIndicator" class="text-center p-8 text-slate-500">Carregando...</div>
+                </div>
+
+                <div id="paginationControls" class="flex justify-center gap-2 mt-6"></div>
+            `;
+            
+            document.getElementById('acessorioSearchInput').addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') fetchAcessorios(0);
+            });
+            document.getElementById('acessorioSortSelect').addEventListener('change', () => fetchAcessorios(0));
+            document.getElementById('acessorioDirectionSelect').addEventListener('change', () => fetchAcessorios(0));
+
+            fetchAcessorios(page);
+        }
+
+        async function fetchAcessorios(page) {
+            const searchInput = document.getElementById('acessorioSearchInput').value;
+            const sortSelect = document.getElementById('acessorioSortSelect').value;
+            const directionSelect = document.getElementById('acessorioDirectionSelect').value;
+            const listContainer = document.getElementById('acessoriosListContainer');
+            const paginationControls = document.getElementById('paginationControls');
+
+            listContainer.innerHTML = `<div id="loadingIndicator" class="text-center p-8 text-slate-500">Carregando...</div>`;
+            paginationControls.innerHTML = '';
+            state.currentPage = page;
+
+            const url = `${API_BASE_URL}/acessorios/search?q=${searchInput}&page=${page}&size=4&sort=${sortSelect}&direction=${directionSelect}`;
+
+            try {
+                const data = await apiFetch(url);
+                state.totalPages = data.TotalPages || 1;
+
+                if (data.Acessorios.length === 0) {
+                    listContainer.innerHTML = `<div class="text-center p-8 text-slate-500">Nenhum acessório encontrado.</div>`;
+                    return;
+                }
+
+                listContainer.innerHTML = `
+                    <table class="min-w-full bg-white rounded-lg shadow-md">
+                        <thead>
+                            <tr class="bg-gray-200 text-left text-slate-600 uppercase text-sm leading-normal">
+                                <th class="py-3 px-6">ID</th>
+                                <th class="py-3 px-6">Nome</th>
+                                <th class="py-3 px-6">Valor</th>
+                                <th class="py-3 px-6">Carro</th>
+                                <th class="py-3 px-6">Ações</th>
+                            </tr>
+                        </thead>
+                        <tbody id="acessoriosTableBody" class="text-slate-600 text-sm font-light">
+                        </tbody>
+                    </table>
+                `;
+                const tbody = document.getElementById('acessoriosTableBody');
+                data.Acessorios.forEach(item => {
+                    const row = document.createElement('tr');
+                    row.className = "border-b border-gray-200 hover:bg-gray-50";
+                    row.innerHTML = `
+                        <td class="py-3 px-6 whitespace-nowrap">${item.id}</td>
+                        <td class="py-3 px-6">${item.nome}</td>
+                        <td class="py-3 px-6">R$ ${item.valor ? item.valor.toFixed(2) : 'N/A'}</td>
+                        <td class="py-3 px-6">${item.carro ? item.carro.modelo : 'N/A'}</td>
+                        <td class="py-3 px-6 flex space-x-2">
+                            <button onclick="router('acessorios', 'form', ${item.id})" class="bg-warning hover:bg-amber-600 text-white font-bold py-1 px-3 rounded-lg text-xs transition duration-150">Editar</button>
+                            <button onclick="handleAcessorioDelete(${item.id})" class="bg-danger hover:bg-red-600 text-white font-bold py-1 px-3 rounded-lg text-xs transition duration-150">Excluir</button>
+                        </td>
+                    `;
+                    tbody.appendChild(row);
+                });
+                
+                for (let i = 0; i < state.totalPages; i++) {
+                    const btn = document.createElement('button');
+                    btn.textContent = i + 1;
+                    btn.onclick = () => fetchAcessorios(i);
+                    btn.className = `py-2 px-4 rounded-lg font-bold transition duration-150 ${i === state.currentPage ? 'bg-primary text-white hover:bg-teal-700' : 'bg-gray-200 text-slate-700 hover:bg-gray-300'}`;
+                    paginationControls.appendChild(btn);
+                }
+
+            } catch (error) {
+                listContainer.innerHTML = `<div class="text-center p-8 text-danger font-semibold">Erro ao carregar dados: ${error.message}</div>`;
+            }
+        }
+
+        async function renderAcessorioForm() {
+            const isEditing = state.entityId !== null;
+            const content = document.getElementById('content');
+            
+            content.innerHTML = `<div id="loadingIndicator" class="text-center p-8 text-slate-500">Preparando formulário...</div>`;
+
+            // Carrega dependências (Carros e Fabricantes)
+            await Promise.all([fetchAllCarros(), fetchAllFabricantes()]);
+            
+            let initialData = {};
+            if (isEditing) {
+                try {
+                    initialData = await apiFetch(`${API_BASE_URL}/acessorios/${state.entityId}`);
+                } catch (error) {
+                    showToast(`Erro ao carregar Acessório ID ${state.entityId}.`, 'danger');
+                    router('acessorios');
+                    return;
+                }
+            }
+
+            const title = isEditing ? `Editar Acessório ID ${state.entityId}` : 'Novo Acessório';
+            
+            content.innerHTML = `
+                <h2 class="text-3xl font-bold mb-6 text-slate-800 border-b pb-2">${title}</h2>
+                <form id="acessorioForm" class="space-y-4 max-w-2xl mx-auto">
+                    <!-- Nome (required) -->
+                    <label class="block">
+                        <span class="text-slate-700">Nome <span class="text-danger">*</span></span>
+                        <input type="text" id="nome" required maxlength="200" class="mt-1 block w-full p-2 border border-gray-300 rounded-lg focus:border-primary focus:ring focus:ring-primary focus:ring-opacity-50" value="${initialData.nome || ''}">
+                    </label>
+                    
+                    <!-- Descrição (required) -->
+                    <label class="block">
+                        <span class="text-slate-700">Descrição <span class="text-danger">*</span></span>
+                        <textarea id="descricao" required maxlength="2000" rows="3" class="mt-1 block w-full p-2 border border-gray-300 rounded-lg focus:border-primary focus:ring focus:ring-primary focus:ring-opacity-50">${initialData.descricao || ''}</textarea>
+                    </label>
+
+                    <!-- Ano de Aquisição -->
+                    <label class="block">
+                        <span class="text-slate-700">Ano de Aquisição (Min: 1900)</span>
+                        <input type="number" id="anoAquisicao" min="1900" class="mt-1 block w-full p-2 border border-gray-300 rounded-lg" value="${initialData.anoAquisicao || ''}">
+                    </label>
+
+                    <!-- Valor -->
+                    <label class="block">
+                        <span class="text-slate-700">Valor (Min: 0.0, Max: 100000.0)</span>
+                        <input type="number" id="valor" step="0.01" min="0.0" max="100000.0" class="mt-1 block w-full p-2 border border-gray-300 rounded-lg" value="${initialData.valor || ''}">
+                    </label>
+
+                    <!-- Tempo de Instalação (Minutos) -->
+                    <label class="block">
+                        <span class="text-slate-700">Tempo de Instalação (Minutos)</span>
+                        <input type="number" id="tempoInstalacaoMinutos" min="0" class="mt-1 block w-full p-2 border border-gray-300 rounded-lg" value="${initialData.tempoInstalacaoMinutos || ''}">
+                    </label>
+
+                    <!-- Carro (Relacionamento N:1) -->
+                    <label class="block">
+                        <span class="text-slate-700">Carro Associado</span>
+                        <select id="carroSelect" class="mt-1 block w-full p-2 border border-gray-300 rounded-lg">
+                            <option value="">Nenhum</option>
+                            ${state.carros.map(c => `
+                                <option value="${c.id}" ${initialData.carro && initialData.carro.id === c.id ? 'selected' : ''}>
+                                    ${c.modelo} (${c.paisDeMontagem})
+                                </option>
+                            `).join('')}
+                        </select>
+                    </label>
+
+                    <!-- Fabricantes (Relacionamento N:M) -->
+                    <label class="block">
+                        <span class="text-slate-700">Fabricantes (Multi-seleção)</span>
+                        <select id="fabricantesSelect" multiple size="5" class="mt-1 block w-full p-2 border border-gray-300 rounded-lg h-32">
+                            ${state.fabricantes.map(f => `
+                                <option value="${f.id}" ${initialData.fabricantes && initialData.fabricantes.some(ef => ef.id === f.id) ? 'selected' : ''}>
+                                    ${f.nome}
+                                </option>
+                            `).join('')}
+                        </select>
+                        <p class="text-xs text-slate-500 mt-1">Mantenha 'Ctrl' ou 'Cmd' pressionado para selecionar múltiplos.</p>
+                    </label>
+
+                    <!-- Botões de Ação -->
+                    <div class="flex justify-end space-x-3 pt-4">
+                        <button type="button" onclick="router('acessorios')" class="bg-secondary hover:bg-slate-700 text-white font-bold py-2 px-4 rounded-lg transition duration-150">Cancelar</button>
+                        <button type="submit" class="bg-primary hover:bg-teal-700 text-white font-bold py-2 px-4 rounded-lg transition duration-150">
+                            ${isEditing ? 'Salvar Alterações' : 'Criar Acessório'}
+                        </button>
+                    </div>
+                </form>
+            `;
+
+            document.getElementById('acessorioForm').addEventListener('submit', handleAcessorioSubmit);
+        }
+
+        async function handleAcessorioSubmit(event) {
+            event.preventDefault();
+            const isEditing = state.entityId !== null;
+            
+            const form = event.target;
+            const nome = form.nome.value;
+            const descricao = form.descricao.value;
+            
+            if (!nome.trim() || !descricao.trim()) {
+                showToast("Nome e Descrição são campos obrigatórios.", 'warning');
+                return;
+            }
+
+            const carroId = form.carroSelect.value;
+            const fabricanteIds = Array.from(form.fabricantesSelect.selectedOptions).map(option => parseInt(option.value));
+
+            const carroObj = carroId ? state.carros.find(c => c.id == carroId) : null;
+            const fabricantesObjs = state.fabricantes.filter(f => fabricanteIds.includes(f.id));
+
+            const payload = {
+                nome: nome,
+                descricao: descricao,
+                anoAquisicao: form.anoAquisicao.value ? parseInt(form.anoAquisicao.value) : null,
+                valor: form.valor.value ? parseFloat(form.valor.value) : null,
+                tempoInstalacaoMinutos: form.tempoInstalacaoMinutos.value ? parseInt(form.tempoInstalacaoMinutos.value) : null,
+                // O payload da API espera objetos completos ou nulos para relacionamentos
+                carro: carroObj,
+                fabricantes: fabricantesObjs
+            };
+            
+            const method = isEditing ? 'PUT' : 'POST';
+            const url = isEditing ? `${API_BASE_URL}/acessorios/${state.entityId}` : `${API_BASE_URL}/acessorios`;
+            let successMessage = isEditing ? 'Acessório atualizado com sucesso!' : 'Acessório criado com sucesso!';
+            
+            try {
+                await apiFetch(url, {
+                    method: method,
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                
+                showToast(successMessage, 'success');
+                router('acessorios');
+            } catch (error) {
+                showToast(`Falha ao salvar acessório: ${error.message}`, 'danger');
+            }
+        }
+
+        function handleAcessorioDelete(id) {
+            showConfirmationModal(
+                'Confirmar Exclusão',
+                `Você tem certeza que deseja excluir o Acessório ID ${id}?`,
+                async () => {
+                    try {
+                        await apiFetch(`${API_BASE_URL}/acessorios/${id}`, { method: 'DELETE' });
+                        showToast(`Acessório ID ${id} excluído com sucesso.`, 'success');
+                        fetchAcessorios(state.currentPage);
+                    } catch (error) {
+                        showToast(`Falha ao excluir: ${error.message}`, 'danger');
+                    }
+                }
+            );
+        }
+
+        // --- 7. VIEWS (CARROS - AGORA COMPLETA) ---
+
+        function renderCarrosList() {
+            const content = document.getElementById('content');
+            content.innerHTML = `
+                <h2 class="text-3xl font-bold mb-6 text-slate-800 border-b pb-2">Lista de Carros</h2>
+                <div class="flex flex-wrap gap-4 mb-6 items-center">
+                    <input type="text" id="carroSearchInput" placeholder="Buscar por modelo ou país" class="p-3 border border-gray-300 rounded-lg flex-grow min-w-40">
+                    <button onclick="fetchCarros(0)" class="bg-primary hover:bg-teal-700 text-white font-bold py-3 px-6 rounded-lg transition duration-150 shadow-md">Pesquisar</button>
+                    <button onclick="router('carros', 'form')" class="bg-success hover:bg-emerald-700 text-white font-bold py-3 px-6 rounded-lg transition duration-150 shadow-md ml-auto">Novo Carro</button>
+                </div>
+                <div id="carrosListContainer" class="overflow-x-auto">
+                    <div id="loadingIndicator" class="text-center p-8 text-slate-500">Carregando...</div>
+                </div>
+                <div id="paginationControlsCarros" class="flex justify-center gap-2 mt-6"></div>
+            `;
+            document.getElementById('carroSearchInput').addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') fetchCarros(0);
+            });
+            fetchCarros(0);
+        }
+
+        async function fetchCarros(page) {
+            const searchInput = document.getElementById('carroSearchInput').value;
+            const listContainer = document.getElementById('carrosListContainer');
+            listContainer.innerHTML = `<div id="loadingIndicator" class="text-center p-8 text-slate-500">Buscando Carros...</div>`;
+            
+            try {
+                // Aqui estamos simplificando os parâmetros de sort/direction por enquanto.
+                const url = `${API_BASE_URL}/carros/search?q=${searchInput}&page=${page}&size=4&sort=id&direction=asc`;
+                const data = await apiFetch(url);
+
+                if (data.Carros.length === 0) {
+                    listContainer.innerHTML = `<div class="text-center p-8 text-slate-500">Nenhum carro encontrado.</div>`;
+                    return;
+                }
+
+                listContainer.innerHTML = `
+                    <table class="min-w-full bg-white rounded-lg shadow-md">
+                        <thead>
+                            <tr class="bg-gray-200 text-left text-slate-600 uppercase text-sm leading-normal">
+                                <th class="py-3 px-6">ID</th>
+                                <th class="py-3 px-6">Modelo</th>
+                                <th class="py-3 px-6">País de Montagem</th>
+                                <th class="py-3 px-6">Data Fabr.</th>
+                                <th class="py-3 px-6">Ações</th>
+                            </tr>
+                        </thead>
+                        <tbody class="text-slate-600 text-sm font-light">
+                            ${data.Carros.map(c => `
+                                <tr class="border-b border-gray-200 hover:bg-gray-50">
+                                    <td class="py-3 px-6 whitespace-nowrap">${c.id}</td>
+                                    <td class="py-3 px-6">${c.modelo}</td>
+                                    <td class="py-3 px-6">${c.paisDeMontagem}</td>
+                                    <td class="py-3 px-6">${c.dataDeFabricacao || 'N/A'}</td>
+                                    <td class="py-3 px-6 flex space-x-2">
+                                        <button onclick="router('carros', 'form', ${c.id})" class="bg-warning hover:bg-amber-600 text-white font-bold py-1 px-3 rounded-lg text-xs transition duration-150">Editar</button>
+                                        <button onclick="handleCarroDelete(${c.id})" class="bg-danger hover:bg-red-600 text-white font-bold py-1 px-3 rounded-lg text-xs transition duration-150">Excluir</button>
+                                    </td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                `;
+                // Paginação
+            } catch (error) {
+                listContainer.innerHTML = `<div class="text-center p-8 text-danger font-semibold">Erro ao carregar carros: ${error.message}</div>`;
+            }
+        }
+
+        async function renderCarroForm() {
+            const content = document.getElementById('content');
+            const isEditing = state.entityId !== null;
+            
+            content.innerHTML = `<div id="loadingIndicator" class="text-center p-8 text-slate-500">Preparando formulário...</div>`;
+            
+            let initialData = { fichaTecnica: {} };
+            if (isEditing) {
+                try {
+                    initialData = await apiFetch(`${API_BASE_URL}/carros/${state.entityId}`);
+                    // Garante que fichaTecnica não é nula
+                    initialData.fichaTecnica = initialData.fichaTecnica || {}; 
+                } catch (error) {
+                    showToast(`Erro ao carregar Carro ID ${state.entityId}.`, 'danger');
+                    router('carros');
+                    return;
+                }
+            }
+
+            const title = isEditing ? `Editar Carro ID ${state.entityId}` : 'Novo Carro';
+
+            content.innerHTML = `
+                <h2 class="text-3xl font-bold mb-6 text-slate-800 border-b pb-2">${title}</h2>
+                <form id="carroForm" class="space-y-6 max-w-3xl mx-auto">
+                    
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <!-- Modelo (required) -->
+                        <label class="block">
+                            <span class="text-slate-700">Modelo <span class="text-danger">*</span></span>
+                            <input type="text" id="modelo" required maxlength="100" minlength="2" class="mt-1 block w-full p-2 border border-gray-300 rounded-lg focus:border-primary" value="${initialData.modelo || ''}">
+                        </label>
+                        
+                        <!-- País de Montagem (required) -->
+                        <label class="block">
+                            <span class="text-slate-700">País de Montagem <span class="text-danger">*</span></span>
+                            <input type="text" id="paisDeMontagem" required maxlength="80" class="mt-1 block w-full p-2 border border-gray-300 rounded-lg focus:border-primary" value="${initialData.paisDeMontagem || ''}">
+                        </label>
+
+                        <!-- Nome Completo Versão -->
+                        <label class="block">
+                            <span class="text-slate-700">Nome Completo da Versão</span>
+                            <input type="text" id="nomeCompletoVersao" class="mt-1 block w-full p-2 border border-gray-300 rounded-lg focus:border-primary" value="${initialData.nomeCompletoVersao || ''}">
+                        </label>
+
+                        <!-- Data de Fabricação (LocalDate) -->
+                        <label class="block">
+                            <span class="text-slate-700">Data de Fabricação</span>
+                            <input type="date" id="dataDeFabricacao" class="mt-1 block w-full p-2 border border-gray-300 rounded-lg focus:border-primary" value="${initialData.dataDeFabricacao || ''}">
+                        </label>
+                    </div>
+
+                    <!-- Ficha Técnica (Relacionamento 1:1) -->
+                    <div class="p-5 border border-gray-200 rounded-lg bg-gray-50 shadow-inner">
+                        <h3 class="text-xl font-semibold mb-4 text-slate-700 border-b pb-2">Ficha Técnica</h3>
+                        
+                        <!-- Detalhes do Motor -->
+                        <label class="block mb-4">
+                            <span class="text-slate-700">Detalhes do Motor</span>
+                            <textarea id="detalhesDoMotor" maxlength="2000" rows="3" class="mt-1 block w-full p-2 border border-gray-300 rounded-lg focus:border-primary">${initialData.fichaTecnica.detalhesDoMotor || ''}</textarea>
+                        </label>
+                        
+                        <!-- Tipo de Combustível -->
+                        <label class="block mb-4">
+                            <span class="text-slate-700">Tipo de Combustível</span>
+                            <input type="text" id="tipoDeCombustivel" maxlength="200" class="mt-1 block w-full p-2 border border-gray-300 rounded-lg focus:border-primary" value="${initialData.fichaTecnica.tipoDeCombustivel || ''}">
+                        </label>
+
+                        <!-- Opcionais de Fábrica -->
+                        <label class="block">
+                            <span class="text-slate-700">Opcionais de Fábrica</span>
+                            <textarea id="opcionaisDeFabrica" rows="3" class="mt-1 block w-full p-2 border border-gray-300 rounded-lg focus:border-primary">${initialData.fichaTecnica.opcionaisDeFabrica || ''}</textarea>
+                        </label>
+                    </div>
+
+                    <!-- Botões de Ação -->
+                    <div class="flex justify-end space-x-3 pt-4">
+                        <button type="button" onclick="router('carros')" class="bg-secondary hover:bg-slate-700 text-white font-bold py-2 px-4 rounded-lg transition duration-150">Cancelar</button>
+                        <button type="submit" class="bg-primary hover:bg-teal-700 text-white font-bold py-2 px-4 rounded-lg transition duration-150">
+                            ${isEditing ? 'Salvar Alterações' : 'Criar Carro'}
+                        </button>
+                    </div>
+                </form>
+            `;
+
+            document.getElementById('carroForm').addEventListener('submit', handleCarroSubmit);
+        }
+
+        /**
+         * Lida com o envio do formulário de Carro (POST ou PUT), incluindo Ficha Técnica aninhada.
+         */
+        async function handleCarroSubmit(event) {
+            event.preventDefault();
+            const isEditing = state.entityId !== null;
+            
+            const form = event.target;
+            const modelo = form.modelo.value.trim();
+            const paisDeMontagem = form.paisDeMontagem.value.trim();
+            
+            if (!modelo || !paisDeMontagem) {
+                showToast("Modelo e País de Montagem são campos obrigatórios.", 'warning');
+                return;
+            }
+
+            // 1. Constrói o objeto Ficha Tecnica
+            const fichaTecnicaPayload = {
+                detalhesDoMotor: form.detalhesDoMotor.value || null,
+                tipoDeCombustivel: form.tipoDeCombustivel.value || null,
+                opcionaisDeFabrica: form.opcionaisDeFabrica.value || null,
+            };
+            
+            // 2. Constrói o Payload principal do Carro
+            const payload = {
+                modelo: modelo,
+                paisDeMontagem: paisDeMontagem,
+                nomeCompletoVersao: form.nomeCompletoVersao.value || null,
+                dataDeFabricacao: form.dataDeFabricacao.value || null,
+                fichaTecnica: fichaTecnicaPayload,
+            };
+            
+            // Se estiver editando, o ID do Carro é mantido (a API fará o mapeamento da Ficha Técnica se necessário)
+            if (isEditing) {
+                payload.id = state.entityId;
+            }
+
+            const method = isEditing ? 'PUT' : 'POST';
+            const url = isEditing ? `${API_BASE_URL}/carros/${state.entityId}` : `${API_BASE_URL}/carros`;
+            let successMessage = isEditing ? 'Carro atualizado com sucesso!' : 'Carro criado com sucesso!';
+            
+            try {
+                await apiFetch(url, {
+                    method: method,
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                
+                showToast(successMessage, 'success');
+                router('carros');
+            } catch (error) {
+                showToast(`Falha ao salvar carro: ${error.message}`, 'danger');
+            }
+        }
+
+        function handleCarroDelete(id) {
+            showConfirmationModal(
+                'Confirmar Exclusão de Carro',
+                `Você tem certeza que deseja excluir o Carro ID ${id}? (Pode haver conflito se houver acessórios vinculados - 409)`,
+                async () => {
+                    try {
+                        await apiFetch(`${API_BASE_URL}/carros/${id}`, { method: 'DELETE' });
+                        showToast(`Carro ID ${id} excluído com sucesso.`, 'success');
+                        fetchCarros(0);
+                    } catch (error) {
+                         // O erro 409 retorna a mensagem no corpo
+                        showToast(`Falha ao excluir carro: ${error.message}`, 'danger');
+                    }
+                }
+            );
+        }
+
+        // --- 8. VIEWS (FABRICANTES - Mantidas) ---
+
+        function renderFabricantesList() {
+            const content = document.getElementById('content');
+            content.innerHTML = `
+                <h2 class="text-3xl font-bold mb-6 text-slate-800 border-b pb-2">Lista de Fabricantes</h2>
+                <div class="flex flex-wrap gap-4 mb-6 items-center">
+                    <input type="text" id="fabricanteSearchInput" placeholder="Buscar por nome ou detalhes" class="p-3 border border-gray-300 rounded-lg flex-grow min-w-40">
+                    <button onclick="fetchFabricantes(0)" class="bg-primary hover:bg-teal-700 text-white font-bold py-3 px-6 rounded-lg transition duration-150 shadow-md">Pesquisar</button>
+                    <button onclick="router('fabricantes', 'form')" class="bg-success hover:bg-emerald-700 text-white font-bold py-3 px-6 rounded-lg transition duration-150 shadow-md ml-auto">Novo Fabricante</button>
+                </div>
+                <div id="fabricantesListContainer" class="overflow-x-auto">
+                    <div id="loadingIndicator" class="text-center p-8 text-slate-500">Carregando...</div>
+                </div>
+                <div id="paginationControlsFabricantes" class="flex justify-center gap-2 mt-6"></div>
+            `;
+            document.getElementById('fabricanteSearchInput').addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') fetchFabricantes(0);
+            });
+            fetchFabricantes(0);
+        }
+
+        async function fetchFabricantes(page) {
+            const searchInput = document.getElementById('fabricanteSearchInput').value;
+            const listContainer = document.getElementById('fabricantesListContainer');
+            listContainer.innerHTML = `<div id="loadingIndicator" class="text-center p-8 text-slate-500">Buscando Fabricantes...</div>`;
+            
+            try {
+                const url = `${API_BASE_URL}/fabricantes/search?q=${searchInput}&page=${page}&size=4&sort=id&direction=asc`;
+                const data = await apiFetch(url);
+
+                if (data.Fabricantes.length === 0) {
+                    listContainer.innerHTML = `<div class="text-center p-8 text-slate-500">Nenhum fabricante encontrado.</div>`;
+                    return;
+                }
+
+                listContainer.innerHTML = `
+                    <table class="min-w-full bg-white rounded-lg shadow-md">
+                        <thead>
+                            <tr class="bg-gray-200 text-left text-slate-600 uppercase text-sm leading-normal">
+                                <th class="py-3 px-6">ID</th>
+                                <th class="py-3 px-6">Nome</th>
+                                <th class="py-3 px-6">Detalhes</th>
+                                <th class="py-3 px-6">Ações</th>
+                            </tr>
+                        </thead>
+                        <tbody class="text-slate-600 text-sm font-light">
+                            ${data.Fabricantes.map(f => `
+                                <tr class="border-b border-gray-200 hover:bg-gray-50">
+                                    <td class="py-3 px-6 whitespace-nowrap">${f.id}</td>
+                                    <td class="py-3 px-6">${f.nome}</td>
+                                    <td class="py-3 px-6">${f.detalhes || 'N/A'}</td>
+                                    <td class="py-3 px-6 flex space-x-2">
+                                        <button onclick="router('fabricantes', 'form', ${f.id})" class="bg-warning hover:bg-amber-600 text-white font-bold py-1 px-3 rounded-lg text-xs transition duration-150">Editar</button>
+                                        <button onclick="handleFabricanteDelete(${f.id})" class="bg-danger hover:bg-red-600 text-white font-bold py-1 px-3 rounded-lg text-xs transition duration-150">Excluir</button>
+                                    </td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                `;
+            } catch (error) {
+                listContainer.innerHTML = `<div class="text-center p-8 text-danger font-semibold">Erro ao carregar fabricantes: ${error.message}</div>`;
+            }
+        }
+        
+        async function renderFabricanteForm() {
+            const content = document.getElementById('content');
+            const isEditing = state.entityId !== null;
+            
+            let initialData = {};
+            if (isEditing) {
+                 try {
+                    initialData = await apiFetch(`${API_BASE_URL}/fabricantes/${state.entityId}`);
+                } catch (error) {
+                    showToast(`Erro ao carregar Fabricante ID ${state.entityId}.`, 'danger');
+                    router('fabricantes');
+                    return;
+                }
+            }
+
+            const title = isEditing ? `Editar Fabricante ID ${state.entityId}` : 'Novo Fabricante';
+
+            content.innerHTML = `
+                <h2 class="text-3xl font-bold mb-6 text-slate-800 border-b pb-2">${title}</h2>
+                <form id="fabricanteForm" class="space-y-4 max-w-xl mx-auto">
+                    <!-- Nome (required) -->
+                    <label class="block">
+                        <span class="text-slate-700">Nome <span class="text-danger">*</span></span>
+                        <input type="text" id="nome" required maxlength="50" minlength="2" class="mt-1 block w-full p-2 border border-gray-300 rounded-lg focus:border-primary" value="${initialData.nome || ''}">
+                    </label>
+                    
+                    <!-- Detalhes -->
+                    <label class="block">
+                        <span class="text-slate-700">Detalhes</span>
+                        <textarea id="detalhes" maxlength="200" rows="2" class="mt-1 block w-full p-2 border border-gray-300 rounded-lg focus:border-primary">${initialData.detalhes || ''}</textarea>
+                    </label>
+
+                    <!-- Botões de Ação -->
+                    <div class="flex justify-end space-x-3 pt-4">
+                        <button type="button" onclick="router('fabricantes')" class="bg-secondary hover:bg-slate-700 text-white font-bold py-2 px-4 rounded-lg transition duration-150">Cancelar</button>
+                        <button type="submit" class="bg-primary hover:bg-teal-700 text-white font-bold py-2 px-4 rounded-lg transition duration-150">
+                            ${isEditing ? 'Salvar Alterações' : 'Criar Fabricante'}
+                        </button>
+                    </div>
+                </form>
+            `;
+
+            document.getElementById('fabricanteForm').addEventListener('submit', handleFabricanteSubmit);
+        }
+
+        async function handleFabricanteSubmit(event) {
+            event.preventDefault();
+            const isEditing = state.entityId !== null;
+            
+            const form = event.target;
+            const nome = form.nome.value.trim();
+            const detalhes = form.detalhes.value;
+
+            if (!nome) {
+                showToast("O campo Nome é obrigatório.", 'warning');
+                return;
+            }
+
+            const payload = {
+                nome: nome,
+                detalhes: detalhes || null
+            };
+            
+            const method = isEditing ? 'PUT' : 'POST';
+            const url = isEditing ? `${API_BASE_URL}/fabricantes/${state.entityId}` : `${API_BASE_URL}/fabricantes`;
+            let successMessage = isEditing ? 'Fabricante atualizado com sucesso!' : 'Fabricante criado com sucesso!';
+            
+            try {
+                await apiFetch(url, {
+                    method: method,
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                
+                showToast(successMessage, 'success');
+                router('fabricantes');
+            } catch (error) {
+                showToast(`Falha ao salvar fabricante: ${error.message}`, 'danger');
+            }
+        }
+        
+        function handleFabricanteDelete(id) {
+            showConfirmationModal(
+                'Confirmar Exclusão de Fabricante',
+                `Você tem certeza que deseja excluir o Fabricante ID ${id}? (Pode haver conflito se houver acessórios vinculados - 409)`,
+                async () => {
+                    try {
+                        await apiFetch(`${API_BASE_URL}/fabricantes/${id}`, { method: 'DELETE' });
+                        showToast(`Fabricante ID ${id} excluído com sucesso.`, 'success');
+                        fetchFabricantes(0);
+                    } catch (error) {
+                        showToast(`Falha ao excluir fabricante: ${error.message}`, 'danger');
+                    }
+                }
+            );
+        }
+
+
+        // --- 9. INICIALIZAÇÃO ---
+        window.onload = () => router('acessorios'); 
+    </script>
+</body>
+</html>
