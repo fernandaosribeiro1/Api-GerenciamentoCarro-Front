@@ -4,9 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>API Gerenciamento de Carros</title>
-    <script src="s://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
     <script>
-        // Configuração do Tailwind com paleta de cores mais profissional (Teal/Slate)
         tailwind.config = {
             theme: {
                 extend: {
@@ -24,9 +23,7 @@
         }
     </script>
     <style>
-        /* Estilos adicionais para o Multi-Select e scroll suave */
         .h-32 { height: 8rem; }
-        /* Scrollbar discreto */
         .overflow-x-auto::-webkit-scrollbar {
             height: 8px;
         }
@@ -66,25 +63,22 @@
             </div>
         </div>
 
-        <div id="toast-container" class="fixed bottom-5 right-5 z-50 space-y-2">
-            </div>
+        <div id="toast-container" class="fixed bottom-5 right-5 z-50 space-y-2"></div>
     </div>
 
     <script>
         // --- 1. CONFIGURAÇÕES GLOBAIS ---
         const API_BASE_URL = 'https://api-gerenciamentocarro-final.onrender.com/api/v1';
-        const MAX_RETRIES = 3;
+        const MAX_RETRIES = 2; // Reduzido para testes mais rápidos
         const state = {
-            currentView: '', // 'acessorios', 'carros', 'fabricantes'
-            mode: 'list',    // 'list' ou 'form'
-            data: null,      // Dados para listagem ou objeto para edição
-            entityId: null,  // ID da entidade em edição
+            currentView: '',
+            mode: 'list',
+            data: null,
+            entityId: null,
             currentPage: 0,
             totalPages: 1,
-            // Cache para selects de relacionamento
             carros: [],
             fabricantes: [],
-            // Parâmetros de busca (adicionados para Carros e Fabricantes)
             search: {
                 acessorios: { q: '', sort: 'id', direction: 'asc' },
                 carros: { q: '', sort: 'id', direction: 'asc' },
@@ -92,21 +86,18 @@
             }
         };
 
-        // --- 2. SERVIÇO DE API COM EXPONENTIAL BACKOFF (Mantido) ---
+        // --- FUNÇÃO UTILITÁRIA DE DATA ---
+        // Remove a parte da hora se existir, para funcionar no input type="date"
+        function formatDateForInput(dateString) {
+            if (!dateString) return '';
+            return dateString.split('T')[0];
+        }
 
-        /**
-         * Realiza chamadas à API com lógica de retry.
-         * @param {string} url - A URL completa da API.
-         * @param {object} options - Opções do fetch (method, headers, body).
-         * @returns {Promise<any>} A resposta JSON.
-         */
+        // --- 2. SERVIÇO DE API ---
         async function apiFetch(url, options = {}, retries = 0) {
             try {
                 const response = await fetch(url, options);
-
-                if (response.status === 204) {
-                    return null; // No Content
-                }
+                if (response.status === 204) return null;
 
                 const contentType = response.headers.get("content-type");
                 let data = null;
@@ -114,41 +105,29 @@
                 if (contentType && contentType.indexOf("application/json") !== -1) {
                     data = await response.json();
                 } else if (contentType && contentType.indexOf("text/plain") !== -1) {
-                    // Se for 409, pode retornar um texto simples de erro.
                     data = await response.text();
                 } else {
                     data = {};
                 }
 
                 if (!response.ok) {
-                    // Trata o erro 409 retornando a mensagem de conflito
                     if (response.status === 409) {
-                        throw new Error(data || "Conflito ao processar a requisição. Há itens vinculados.");
+                        throw new Error(typeof data === 'string' ? data : "Conflito: Item em uso por outra entidade.");
                     }
-                    // Para outros erros , tenta obter a mensagem do JSON ou usa o status.
-                    throw new Error(`Erro ${response.status}: ${data?.message || response.statusText || data}`);
+                    throw new Error(data?.message || response.statusText || "Erro desconhecido");
                 }
-                
                 return data;
-
             } catch (error) {
-                if (retries < MAX_RETRIES) {
-                    const delay = Math.pow(2, retries) * 100; // 100ms, 200ms, 400ms...
+                if (retries < MAX_RETRIES && options.method !== 'DELETE') { // Evita retry em DELETE perigoso
+                    const delay = Math.pow(2, retries) * 300;
                     await new Promise(resolve => setTimeout(resolve, delay));
                     return apiFetch(url, options, retries + 1);
                 }
-                console.error("Erro fatal na API após retentativas:", error);
                 throw error;
             }
         }
 
-        // --- 3. GESTÃO DE UI E NOTIFICAÇÕES (Mantidas) ---
-
-        /**
-         * Exibe uma notificação (toast) temporária.
-         * @param {string} message - A mensagem a ser exibida.
-         * @param {string} type - O tipo (success, danger, warning, info).
-         */
+        // --- 3. UI E NOTIFICAÇÕES ---
         function showToast(message, type = 'info') {
             const container = document.getElementById('toast-container');
             const colorMap = {
@@ -157,22 +136,16 @@
                 warning: 'bg-warning text-slate-900',
                 info: 'bg-info'
             };
-
             const toast = document.createElement('div');
             toast.className = `p-4 rounded-lg shadow-2xl text-white font-semibold ${colorMap[type]} transition-all duration-300 transform translate-x-0 opacity-100`;
             toast.textContent = message;
-
             container.appendChild(toast);
-
             setTimeout(() => {
                 toast.classList.add('opacity-0', 'translate-x-full');
                 toast.addEventListener('transitionend', () => toast.remove());
-            }, 5000);
+            }, 4000);
         }
 
-        /**
-         * Exibe um modal de confirmação (substitui window.confirm).
-         */
         function showConfirmationModal(title, body, onConfirm) {
             const modal = document.getElementById('custom-modal');
             document.getElementById('modal-title').textContent = title;
@@ -181,47 +154,41 @@
             const confirmBtn = document.getElementById('modal-confirm');
             const cancelBtn = document.getElementById('modal-cancel');
 
-            // Limpa listeners anteriores
-            confirmBtn.replaceWith(confirmBtn.cloneNode(true));
-            cancelBtn.replaceWith(cancelBtn.cloneNode(true));
+            // Clone nodes to remove old event listeners
+            const newConfirm = confirmBtn.cloneNode(true);
+            const newCancel = cancelBtn.cloneNode(true);
             
-            const newConfirmBtn = document.getElementById('modal-confirm');
-            const newCancelBtn = document.getElementById('modal-cancel');
+            confirmBtn.parentNode.replaceChild(newConfirm, confirmBtn);
+            cancelBtn.parentNode.replaceChild(newCancel, cancelBtn);
 
-            newConfirmBtn.onclick = () => {
+            newConfirm.onclick = () => {
                 modal.classList.add('hidden');
                 onConfirm();
             };
-
-            newCancelBtn.onclick = () => {
-                modal.classList.add('hidden');
-            };
-
+            newCancel.onclick = () => modal.classList.add('hidden');
             modal.classList.remove('hidden');
         }
 
-        // --- 4. FUNÇÕES DE NAVEGAÇÃO E ROTAS (Mantidas) ---
-
-        /**
-         * Altera a view principal da aplicação (o "roteador" simples).
-         */
+        // --- 4. ROTEADOR ---
         function router(view, mode = 'list', id = null, page = 0) {
             state.currentView = view;
             state.mode = mode;
             state.entityId = id;
-            state.currentPage = page; // Resetar ou definir a página
+            state.currentPage = page;
 
-            // Atualiza o destaque na navbar
             document.querySelectorAll('.nav-button').forEach(btn => {
                 btn.classList.remove('bg-primary', 'hover:bg-teal-700');
                 btn.classList.add('bg-secondary', 'hover:bg-slate-700');
             });
-            const activeButton = document.querySelector(`[onclick^="router('${view}')"]`);
-            if (activeButton) {
-                activeButton.classList.add('bg-primary', 'hover:bg-teal-700');
-                activeButton.classList.remove('bg-secondary', 'hover:bg-slate-700');
-            }
-
+            
+            // Correção do seletor do botão ativo
+            const buttons = document.querySelectorAll('button[onclick^="router"]');
+            buttons.forEach(btn => {
+                if(btn.getAttribute('onclick').includes(`'${view}'`)) {
+                    btn.classList.add('bg-primary', 'hover:bg-teal-700');
+                    btn.classList.remove('bg-secondary', 'hover:bg-slate-700');
+                }
+            });
 
             switch (view) {
                 case 'acessorios':
@@ -236,110 +203,89 @@
             }
         }
 
-        // --- FUNÇÕES DE PAGINAÇÃO REUTILIZÁVEIS ---
-
-        /**
-         * Gera os botões de paginação.
-         * @param {string} containerId - O ID do elemento onde os botões serão inseridos.
-         * @param {string} viewName - A view que a paginação controla ('acessorios', 'carros', 'fabricantes').
-         * @param {number} totalPages - O número total de páginas.
-         * @param {number} currentPage - A página atual (base 0).
-         */
+        // --- PAGINAÇÃO ---
         function renderPagination(containerId, viewName, totalPages, currentPage) {
-            const paginationControls = document.getElementById(containerId);
-            if (!paginationControls) return;
+            const container = document.getElementById(containerId);
+            if (!container) return;
+            container.innerHTML = '';
+            
+            // Limita botões se houver muitas páginas
+            const start = Math.max(0, currentPage - 2);
+            const end = Math.min(totalPages, start + 5);
 
-            paginationControls.innerHTML = '';
-
-            for (let i = 0; i < totalPages; i++) {
+            for (let i = start; i < end; i++) {
                 const btn = document.createElement('button');
                 btn.textContent = i + 1;
-                // Ajusta a chamada da função de fetch para a view correta
                 btn.onclick = () => {
                     if (viewName === 'acessorios') fetchAcessorios(i);
                     else if (viewName === 'carros') fetchCarros(i);
                     else if (viewName === 'fabricantes') fetchFabricantes(i);
                 };
-                
-                btn.className = `py-2 px-4 rounded-lg font-bold transition duration-150 ${i === currentPage ? 'bg-primary text-white hover:bg-teal-700' : 'bg-gray-200 text-slate-700 hover:bg-gray-300'}`;
-                paginationControls.appendChild(btn);
+                btn.className = `py-2 px-4 rounded-lg font-bold transition duration-150 ${i === currentPage ? 'bg-primary text-white' : 'bg-gray-200 text-slate-700 hover:bg-gray-300'}`;
+                container.appendChild(btn);
             }
         }
 
-
-        // --- 5. LÓGICA DE DADOS (Cache - Mantidas) ---
-
-        /**
-         * Busca todos os carros para o select de Acessório.
-         */
+        // --- 5. DADOS AUXILIARES (Corrigido para não usar /all) ---
         async function fetchAllCarros() {
             try {
-                // Buscando a lista completa sem paginação para o select
-                const data = await apiFetch(`${API_BASE_URL}/carros/all`); 
-                state.carros = data || [];
+                // CORREÇÃO: Usa paginação grande em vez de /all para garantir compatibilidade
+                const data = await apiFetch(`${API_BASE_URL}/carros?page=0&size=1000`); 
+                // Verifica se a API retorna {content: [...]} ou array direto ou objeto paginado {Carros: [...]}
+                state.carros = data.content || data.Carros || data || [];
             } catch (error) {
-                showToast("Erro ao carregar lista de Carros (cache).", 'danger');
+                console.error(error);
+                showToast("Erro ao carregar lista de Carros.", 'danger');
                 state.carros = [];
             }
         }
 
-        /**
-         * Busca todos os fabricantes para o multi-select de Acessório.
-         */
         async function fetchAllFabricantes() {
             try {
-                // Buscando a lista completa sem paginação para o multi-select
-                const data = await apiFetch(`${API_BASE_URL}/fabricantes/all`);
-                state.fabricantes = data || [];
+                const data = await apiFetch(`${API_BASE_URL}/fabricantes?page=0&size=1000`);
+                state.fabricantes = data.content || data.Fabricantes || data || [];
             } catch (error) {
-                showToast("Erro ao carregar lista de Fabricantes (cache).", 'danger');
+                console.error(error);
+                showToast("Erro ao carregar lista de Fabricantes.", 'danger');
                 state.fabricantes = [];
             }
         }
 
-        // --- 6. VIEWS (ACESSÓRIOS - Mantidas) ---
+        // --- 6. ACESSÓRIOS ---
+        function renderAcessoriosList(page = 0) {
+            // Configura a função global para o botão de pesquisa
+            window.updateAcessorioSearchParams = (p) => {
+                state.search.acessorios.q = document.getElementById('acessorioSearchInput').value;
+                state.search.acessorios.sort = document.getElementById('acessorioSortSelect').value;
+                state.search.acessorios.direction = document.getElementById('acessorioDirectionSelect').value;
+                fetchAcessorios(p);
+            };
 
-        async function renderAcessoriosList(page = 0) {
             const content = document.getElementById('content');
-            
             content.innerHTML = `
                 <h2 class="text-3xl font-bold mb-6 text-slate-800 border-b pb-2">Lista de Acessórios</h2>
                 <div class="flex flex-wrap gap-4 mb-6 items-center">
-                    <input type="text" id="acessorioSearchInput" placeholder="Buscar por nome, ano ou tempo" class="p-3 border border-gray-300 rounded-lg flex-grow min-w-40" value="${state.search.acessorios.q}">
+                    <input type="text" id="acessorioSearchInput" placeholder="Buscar..." class="p-3 border border-gray-300 rounded-lg flex-grow" value="${state.search.acessorios.q}">
                     <select id="acessorioSortSelect" class="p-3 border border-gray-300 rounded-lg">
                         <option value="id" ${state.search.acessorios.sort === 'id' ? 'selected' : ''}>ID</option>
                         <option value="nome" ${state.search.acessorios.sort === 'nome' ? 'selected' : ''}>Nome</option>
-                        <option value="anoAquisicao" ${state.search.acessorios.sort === 'anoAquisicao' ? 'selected' : ''}>Ano de Aquisição</option>
                         <option value="valor" ${state.search.acessorios.sort === 'valor' ? 'selected' : ''}>Valor</option>
                     </select>
                     <select id="acessorioDirectionSelect" class="p-3 border border-gray-300 rounded-lg">
                         <option value="asc" ${state.search.acessorios.direction === 'asc' ? 'selected' : ''}>Crescente</option>
                         <option value="desc" ${state.search.acessorios.direction === 'desc' ? 'selected' : ''}>Decrescente</option>
                     </select>
-                    <button onclick="updateAcessorioSearchParams(0)" class="bg-primary hover:bg-teal-700 text-white font-bold py-3 px-6 rounded-lg transition duration-150 shadow-md">Pesquisar</button>
-                    <button onclick="router('acessorios', 'form')" class="bg-success hover:bg-emerald-700 text-white font-bold py-3 px-6 rounded-lg transition duration-150 shadow-md ml-auto">Novo Acessório</button>
+                    <button onclick="updateAcessorioSearchParams(0)" class="bg-primary hover:bg-teal-700 text-white font-bold py-3 px-6 rounded-lg shadow-md">Pesquisar</button>
+                    <button onclick="router('acessorios', 'form')" class="bg-success hover:bg-emerald-700 text-white font-bold py-3 px-6 rounded-lg shadow-md ml-auto">Novo</button>
                 </div>
-                
-                <div id="acessoriosListContainer" class="overflow-x-auto">
-                    <div id="loadingIndicator" class="text-center p-8 text-slate-500">Carregando...</div>
-                </div>
-
+                <div id="acessoriosListContainer" class="overflow-x-auto"></div>
                 <div id="paginationControlsAcessorios" class="flex justify-center gap-2 mt-6"></div>
             `;
-            
+
+            // Bind do Enter
             document.getElementById('acessorioSearchInput').addEventListener('keydown', (e) => {
                 if (e.key === 'Enter') updateAcessorioSearchParams(0);
             });
-            document.getElementById('acessorioSortSelect').addEventListener('change', () => updateAcessorioSearchParams(0));
-            document.getElementById('acessorioDirectionSelect').addEventListener('change', () => updateAcessorioSearchParams(0));
-
-            // Função auxiliar para atualizar o estado e fazer o fetch
-            window.updateAcessorioSearchParams = (page) => {
-                state.search.acessorios.q = document.getElementById('acessorioSearchInput').value;
-                state.search.acessorios.sort = document.getElementById('acessorioSortSelect').value;
-                state.search.acessorios.direction = document.getElementById('acessorioDirectionSelect').value;
-                fetchAcessorios(page);
-            };
 
             fetchAcessorios(page);
         }
@@ -347,657 +293,396 @@
         async function fetchAcessorios(page) {
             const { q, sort, direction } = state.search.acessorios;
             const listContainer = document.getElementById('acessoriosListContainer');
-            const paginationControls = document.getElementById('paginationControlsAcessorios');
-
-            listContainer.innerHTML = `<div id="loadingIndicator" class="text-center p-8 text-slate-500">Carregando...</div>`;
-            paginationControls.innerHTML = '';
+            
+            listContainer.innerHTML = `<div class="text-center p-8 text-slate-500">Carregando...</div>`;
             state.currentPage = page;
 
-            const url = `${API_BASE_URL}/acessorios/search?q=${q}&page=${page}&size=4&sort=${sort}&direction=${direction}`;
+            // Endpoint de busca
+            const url = `${API_BASE_URL}/acessorios/search?q=${q}&page=${page}&size=5&sort=${sort}&direction=${direction}`;
 
             try {
                 const data = await apiFetch(url);
-                state.totalPages = data.TotalPages || 1;
+                // Ajuste para aceitar tanto Maiúscula quanto minúscula da API
+                const lista = data.Acessorios || data.acessorios || data.content || [];
+                state.totalPages = data.TotalPages || data.totalPages || 1;
 
-                if (data.Acessorios.length === 0) {
-                    listContainer.innerHTML = `<div class="text-center p-8 text-slate-500">Nenhum acessório encontrado.</div>`;
+                if (lista.length === 0) {
+                    listContainer.innerHTML = `<div class="text-center p-8 text-slate-500">Nenhum registro encontrado.</div>`;
                     return;
                 }
 
-                listContainer.innerHTML = `
+                let html = `
                     <table class="min-w-full bg-white rounded-lg shadow-md">
                         <thead>
-                            <tr class="bg-gray-200 text-left text-slate-600 uppercase text-sm leading-normal">
-                                <th class="py-3 px-6">ID</th>
-                                <th class="py-3 px-6">Nome</th>
-                                <th class="py-3 px-6">Valor</th>
-                                <th class="py-3 px-6">Carro</th>
-                                <th class="py-3 px-6">Ações</th>
+                            <tr class="bg-gray-200 text-slate-600 text-sm uppercase">
+                                <th class="py-3 px-6 text-left">ID</th>
+                                <th class="py-3 px-6 text-left">Nome</th>
+                                <th class="py-3 px-6 text-left">Valor</th>
+                                <th class="py-3 px-6 text-left">Carro</th>
+                                <th class="py-3 px-6 text-left">Ações</th>
                             </tr>
                         </thead>
-                        <tbody id="acessoriosTableBody" class="text-slate-600 text-sm font-light">
-                        </tbody>
-                    </table>
-                `;
-                const tbody = document.getElementById('acessoriosTableBody');
-                data.Acessorios.forEach(item => {
-                    const row = document.createElement('tr');
-                    row.className = "border-b border-gray-200 hover:bg-gray-50";
-                    row.innerHTML = `
-                        <td class="py-3 px-6 whitespace-nowrap">${item.id}</td>
-                        <td class="py-3 px-6">${item.nome}</td>
-                        <td class="py-3 px-6">R$ ${item.valor ? item.valor.toFixed(2) : 'N/A'}</td>
-                        <td class="py-3 px-6">${item.carro ? item.carro.modelo : 'N/A'}</td>
-                        <td class="py-3 px-6 flex space-x-2">
-                            <button onclick="router('acessorios', 'form', ${item.id})" class="bg-warning hover:bg-amber-600 text-white font-bold py-1 px-3 rounded-lg text-xs transition duration-150">Editar</button>
-                            <button onclick="handleAcessorioDelete(${item.id})" class="bg-danger hover:bg-red-600 text-white font-bold py-1 px-3 rounded-lg text-xs transition duration-150">Excluir</button>
-                        </td>
-                    `;
-                    tbody.appendChild(row);
-                });
+                        <tbody class="text-slate-600 text-sm font-light">`;
                 
+                lista.forEach(item => {
+                    html += `
+                        <tr class="border-b border-gray-200 hover:bg-gray-50">
+                            <td class="py-3 px-6">${item.id}</td>
+                            <td class="py-3 px-6 font-medium">${item.nome}</td>
+                            <td class="py-3 px-6">R$ ${item.valor ? item.valor.toFixed(2) : '0.00'}</td>
+                            <td class="py-3 px-6">${item.carro?.modelo || '-'}</td>
+                            <td class="py-3 px-6 flex space-x-2">
+                                <button onclick="router('acessorios', 'form', ${item.id})" class="bg-warning hover:bg-amber-600 text-white font-bold py-1 px-3 rounded text-xs">Editar</button>
+                                <button onclick="handleAcessorioDelete(${item.id})" class="bg-danger hover:bg-red-600 text-white font-bold py-1 px-3 rounded text-xs">Excluir</button>
+                            </td>
+                        </tr>`;
+                });
+                html += `</tbody></table>`;
+                listContainer.innerHTML = html;
                 renderPagination('paginationControlsAcessorios', 'acessorios', state.totalPages, state.currentPage);
 
             } catch (error) {
-                listContainer.innerHTML = `<div class="text-center p-8 text-danger font-semibold">Erro ao carregar dados: ${error.message}</div>`;
+                listContainer.innerHTML = `<div class="text-center p-8 text-danger">Erro: ${error.message}</div>`;
             }
         }
 
         async function renderAcessorioForm() {
-            // ... (Função renderAcessorioForm mantida igual - OK)
             const isEditing = state.entityId !== null;
             const content = document.getElementById('content');
-            
-            content.innerHTML = `<div id="loadingIndicator" class="text-center p-8 text-slate-500">Preparando formulário...</div>`;
+            content.innerHTML = `<div class="text-center p-8 text-slate-500">Carregando formulário...</div>`;
 
-            // Carrega dependências (Carros e Fabricantes)
             await Promise.all([fetchAllCarros(), fetchAllFabricantes()]);
-            
+
             let initialData = {};
             if (isEditing) {
                 try {
                     initialData = await apiFetch(`${API_BASE_URL}/acessorios/${state.entityId}`);
-                } catch (error) {
-                    showToast(`Erro ao carregar Acessório ID ${state.entityId}.`, 'danger');
-                    router('acessorios');
-                    return;
+                } catch (e) {
+                    showToast("Erro ao carregar dados.", 'danger');
+                    return router('acessorios');
                 }
             }
 
-            const title = isEditing ? `Editar Acessório ID ${state.entityId}` : 'Novo Acessório';
-            
+            // Render do Formulário (Mantido similar, apenas garantindo ids únicos e selects seguros)
             content.innerHTML = `
-                <h2 class="text-3xl font-bold mb-6 text-slate-800 border-b pb-2">${title}</h2>
+                <h2 class="text-3xl font-bold mb-6 text-slate-800 border-b pb-2">${isEditing ? 'Editar' : 'Novo'} Acessório</h2>
                 <form id="acessorioForm" class="space-y-4 max-w-2xl mx-auto">
                     <label class="block">
-                        <span class="text-slate-700">Nome <span class="text-danger">*</span></span>
-                        <input type="text" id="nome" required maxlength="200" class="mt-1 block w-full p-2 border border-gray-300 rounded-lg focus:border-primary focus:ring focus:ring-primary focus:ring-opacity-50" value="${initialData.nome || ''}">
+                        <span class="text-slate-700">Nome *</span>
+                        <input type="text" id="nome" required class="mt-1 block w-full p-2 border rounded-lg" value="${initialData.nome || ''}">
+                    </label>
+                    <label class="block">
+                        <span class="text-slate-700">Descrição *</span>
+                        <textarea id="descricao" required rows="3" class="mt-1 block w-full p-2 border rounded-lg">${initialData.descricao || ''}</textarea>
+                    </label>
+                    <div class="grid grid-cols-2 gap-4">
+                        <label class="block">
+                            <span class="text-slate-700">Ano Aquisição</span>
+                            <input type="number" id="anoAquisicao" min="1900" class="mt-1 block w-full p-2 border rounded-lg" value="${initialData.anoAquisicao || ''}">
+                        </label>
+                        <label class="block">
+                            <span class="text-slate-700">Valor (R$)</span>
+                            <input type="number" id="valor" step="0.01" class="mt-1 block w-full p-2 border rounded-lg" value="${initialData.valor || ''}">
+                        </label>
+                    </div>
+                    <label class="block">
+                        <span class="text-slate-700">Tempo Instalação (min)</span>
+                        <input type="number" id="tempoInstalacaoMinutos" class="mt-1 block w-full p-2 border rounded-lg" value="${initialData.tempoInstalacaoMinutos || ''}">
                     </label>
                     
                     <label class="block">
-                        <span class="text-slate-700">Descrição <span class="text-danger">*</span></span>
-                        <textarea id="descricao" required maxlength="2000" rows="3" class="mt-1 block w-full p-2 border border-gray-300 rounded-lg focus:border-primary focus:ring focus:ring-primary focus:ring-opacity-50">${initialData.descricao || ''}</textarea>
-                    </label>
-
-                    <label class="block">
-                        <span class="text-slate-700">Ano de Aquisição (Min: 1900)</span>
-                        <input type="number" id="anoAquisicao" min="1900" class="mt-1 block w-full p-2 border border-gray-300 rounded-lg" value="${initialData.anoAquisicao || ''}">
-                    </label>
-
-                    <label class="block">
-                        <span class="text-slate-700">Valor (Min: 0.0, Max: 100000.0)</span>
-                        <input type="number" id="valor" step="0.01" min="0.0" max="100000.0" class="mt-1 block w-full p-2 border border-gray-300 rounded-lg" value="${initialData.valor || ''}">
-                    </label>
-
-                    <label class="block">
-                        <span class="text-slate-700">Tempo de Instalação (Minutos)</span>
-                        <input type="number" id="tempoInstalacaoMinutos" min="0" class="mt-1 block w-full p-2 border border-gray-300 rounded-lg" value="${initialData.tempoInstalacaoMinutos || ''}">
-                    </label>
-
-                    <label class="block">
                         <span class="text-slate-700">Carro Associado</span>
-                        <select id="carroSelect" class="mt-1 block w-full p-2 border border-gray-300 rounded-lg">
+                        <select id="carroSelect" class="mt-1 block w-full p-2 border rounded-lg">
                             <option value="">Nenhum</option>
                             ${state.carros.map(c => `
-                                <option value="${c.id}" ${initialData.carro && initialData.carro.id === c.id ? 'selected' : ''}>
+                                <option value="${c.id}" ${initialData.carro?.id === c.id ? 'selected' : ''}>
                                     ${c.modelo} (${c.paisDeMontagem})
-                                </option>
-                            `).join('')}
+                                </option>`).join('')}
                         </select>
                     </label>
 
                     <label class="block">
-                        <span class="text-slate-700">Fabricantes (Multi-seleção)</span>
-                        <select id="fabricantesSelect" multiple size="5" class="mt-1 block w-full p-2 border border-gray-300 rounded-lg h-32">
+                        <span class="text-slate-700">Fabricantes (Segure Ctrl para múltiplos)</span>
+                        <select id="fabricantesSelect" multiple size="4" class="mt-1 block w-full p-2 border rounded-lg h-32">
                             ${state.fabricantes.map(f => `
-                                <option value="${f.id}" ${initialData.fabricantes && initialData.fabricantes.some(ef => ef.id === f.id) ? 'selected' : ''}>
+                                <option value="${f.id}" ${initialData.fabricantes?.some(ef => ef.id === f.id) ? 'selected' : ''}>
                                     ${f.nome}
-                                </option>
-                            `).join('')}
+                                </option>`).join('')}
                         </select>
-                        <p class="text-xs text-slate-500 mt-1">Mantenha 'Ctrl' ou 'Cmd' pressionado para selecionar múltiplos.</p>
                     </label>
 
                     <div class="flex justify-end space-x-3 pt-4">
-                        <button type="button" onclick="router('acessorios')" class="bg-secondary hover:bg-slate-700 text-white font-bold py-2 px-4 rounded-lg transition duration-150">Cancelar</button>
-                        <button type="submit" class="bg-primary hover:bg-teal-700 text-white font-bold py-2 px-4 rounded-lg transition duration-150">
-                            ${isEditing ? 'Salvar Alterações' : 'Criar Acessório'}
-                        </button>
+                        <button type="button" onclick="router('acessorios')" class="bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-lg">Cancelar</button>
+                        <button type="submit" class="bg-primary hover:bg-teal-700 text-white font-bold py-2 px-4 rounded-lg">Salvar</button>
                     </div>
                 </form>
             `;
 
-            document.getElementById('acessorioForm').addEventListener('submit', handleAcessorioSubmit);
-        }
-
-        async function handleAcessorioSubmit(event) {
-            // ... (Função handleAcessorioSubmit mantida igual - OK)
-            event.preventDefault();
-            const isEditing = state.entityId !== null;
-            
-            const form = event.target;
-            const nome = form.nome.value;
-            const descricao = form.descricao.value;
-            
-            if (!nome.trim() || !descricao.trim()) {
-                showToast("Nome e Descrição são campos obrigatórios.", 'warning');
-                return;
-            }
-
-            const carroId = form.carroSelect.value;
-            const fabricanteIds = Array.from(form.fabricantesSelect.selectedOptions).map(option => parseInt(option.value));
-
-            const carroObj = carroId ? state.carros.find(c => c.id == carroId) : null;
-            const fabricantesObjs = state.fabricantes.filter(f => fabricanteIds.includes(f.id));
-
-            const payload = {
-                nome: nome,
-                descricao: descricao,
-                anoAquisicao: form.anoAquisicao.value ? parseInt(form.anoAquisicao.value) : null,
-                valor: form.valor.value ? parseFloat(form.valor.value) : null,
-                tempoInstalacaoMinutos: form.tempoInstalacaoMinutos.value ? parseInt(form.tempoInstalacaoMinutos.value) : null,
-                // O payload da API espera objetos completos ou nulos para relacionamentos
-                carro: carroObj,
-                fabricantes: fabricantesObjs
-            };
-            
-            const method = isEditing ? 'PUT' : 'POST';
-            const url = isEditing ? `${API_BASE_URL}/acessorios/${state.entityId}` : `${API_BASE_URL}/acessorios`;
-            let successMessage = isEditing ? 'Acessório atualizado com sucesso!' : 'Acessório criado com sucesso!';
-            
-            try {
-                await apiFetch(url, {
-                    method: method,
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
+            document.getElementById('acessorioForm').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const form = e.target;
                 
-                showToast(successMessage, 'success');
-                router('acessorios');
-            } catch (error) {
-                showToast(`Falha ao salvar acessório: ${error.message}`, 'danger');
-            }
+                // Montagem do Payload
+                const fabricanteIds = Array.from(form.fabricantesSelect.selectedOptions).map(o => parseInt(o.value));
+                const carroId = form.carroSelect.value;
+                
+                const payload = {
+                    nome: form.nome.value,
+                    descricao: form.descricao.value,
+                    anoAquisicao: form.anoAquisicao.value ? parseInt(form.anoAquisicao.value) : null,
+                    valor: form.valor.value ? parseFloat(form.valor.value) : null,
+                    tempoInstalacaoMinutos: form.tempoInstalacaoMinutos.value ? parseInt(form.tempoInstalacaoMinutos.value) : null,
+                    carro: carroId ? state.carros.find(c => c.id == carroId) : null,
+                    fabricantes: state.fabricantes.filter(f => fabricanteIds.includes(f.id))
+                };
+                
+                if(isEditing) payload.id = state.entityId; // Alguns backends exigem o ID no body
+
+                const url = isEditing ? `${API_BASE_URL}/acessorios/${state.entityId}` : `${API_BASE_URL}/acessorios`;
+                const method = isEditing ? 'PUT' : 'POST';
+
+                try {
+                    await apiFetch(url, {
+                        method: method,
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify(payload)
+                    });
+                    showToast("Salvo com sucesso!", 'success');
+                    router('acessorios');
+                } catch (err) {
+                    showToast("Erro ao salvar: " + err.message, 'danger');
+                }
+            });
         }
 
         function handleAcessorioDelete(id) {
-            // ... (Função handleAcessorioDelete mantida igual - OK)
-            showConfirmationModal(
-                'Confirmar Exclusão',
-                `Você tem certeza que deseja excluir o Acessório ID ${id}?`,
-                async () => {
-                    try {
-                        await apiFetch(`${API_BASE_URL}/acessorios/${id}`, { method: 'DELETE' });
-                        showToast(`Acessório ID ${id} excluído com sucesso.`, 'success');
-                        fetchAcessorios(state.currentPage);
-                    } catch (error) {
-                        showToast(`Falha ao excluir: ${error.message}`, 'danger');
-                    }
+            showConfirmationModal('Excluir Acessório', 'Tem certeza?', async () => {
+                try {
+                    await apiFetch(`${API_BASE_URL}/acessorios/${id}`, { method: 'DELETE' });
+                    showToast("Excluído!", 'success');
+                    fetchAcessorios(state.currentPage);
+                } catch (err) {
+                    showToast("Erro ao excluir: " + err.message, 'danger');
                 }
-            );
+            });
         }
 
-        // --- 7. VIEWS (CARROS - AJUSTADAS COM PAGINAÇÃO E PESQUISA) ---
-
+        // --- 7. CARROS (Adaptação Simplificada) ---
         function renderCarrosList(page = 0) {
-            const content = document.getElementById('content');
-            content.innerHTML = `
-                <h2 class="text-3xl font-bold mb-6 text-slate-800 border-b pb-2">Lista de Carros</h2>
-                <div class="flex flex-wrap gap-4 mb-6 items-center">
-                    <input type="text" id="carroSearchInput" placeholder="Buscar por modelo ou país" class="p-3 border border-gray-300 rounded-lg flex-grow min-w-40" value="${state.search.carros.q}">
-                    <select id="carroSortSelect" class="p-3 border border-gray-300 rounded-lg">
-                        <option value="id" ${state.search.carros.sort === 'id' ? 'selected' : ''}>ID</option>
-                        <option value="modelo" ${state.search.carros.sort === 'modelo' ? 'selected' : ''}>Modelo</option>
-                        <option value="paisDeMontagem" ${state.search.carros.sort === 'paisDeMontagem' ? 'selected' : ''}>País</option>
-                        <option value="dataDeFabricacao" ${state.search.carros.sort === 'dataDeFabricacao' ? 'selected' : ''}>Data</option>
-                    </select>
-                    <select id="carroDirectionSelect" class="p-3 border border-gray-300 rounded-lg">
-                        <option value="asc" ${state.search.carros.direction === 'asc' ? 'selected' : ''}>Crescente</option>
-                        <option value="desc" ${state.search.carros.direction === 'desc' ? 'selected' : ''}>Decrescente</option>
-                    </select>
-                    <button onclick="updateCarroSearchParams(0)" class="bg-primary hover:bg-teal-700 text-white font-bold py-3 px-6 rounded-lg transition duration-150 shadow-md">Pesquisar</button>
-                    <button onclick="router('carros', 'form')" class="bg-success hover:bg-emerald-700 text-white font-bold py-3 px-6 rounded-lg transition duration-150 shadow-md ml-auto">Novo Carro</button>
-                </div>
-                <div id="carrosListContainer" class="overflow-x-auto">
-                    <div id="loadingIndicator" class="text-center p-8 text-slate-500">Carregando...</div>
-                </div>
-                <div id="paginationControlsCarros" class="flex justify-center gap-2 mt-6"></div>
-            `;
-            document.getElementById('carroSearchInput').addEventListener('keydown', (e) => {
-                if (e.key === 'Enter') updateCarroSearchParams(0);
-            });
-            document.getElementById('carroSortSelect').addEventListener('change', () => updateCarroSearchParams(0));
-            document.getElementById('carroDirectionSelect').addEventListener('change', () => updateCarroSearchParams(0));
-
-            window.updateCarroSearchParams = (page) => {
+            window.updateCarroSearchParams = (p) => {
                 state.search.carros.q = document.getElementById('carroSearchInput').value;
-                state.search.carros.sort = document.getElementById('carroSortSelect').value;
-                state.search.carros.direction = document.getElementById('carroDirectionSelect').value;
-                fetchCarros(page);
+                fetchCarros(p);
             };
 
+            const content = document.getElementById('content');
+            content.innerHTML = `
+                <h2 class="text-3xl font-bold mb-6 text-slate-800 border-b pb-2">Carros</h2>
+                <div class="flex gap-4 mb-6">
+                    <input type="text" id="carroSearchInput" placeholder="Modelo..." class="p-3 border rounded-lg flex-grow" value="${state.search.carros.q}">
+                    <button onclick="updateCarroSearchParams(0)" class="bg-primary text-white px-6 rounded-lg font-bold">Buscar</button>
+                    <button onclick="router('carros', 'form')" class="bg-success text-white px-6 rounded-lg font-bold ml-auto">Novo</button>
+                </div>
+                <div id="carrosListContainer"></div>
+                <div id="paginationControlsCarros" class="flex justify-center gap-2 mt-6"></div>
+            `;
             fetchCarros(page);
         }
 
         async function fetchCarros(page) {
-            const { q, sort, direction } = state.search.carros;
-            const listContainer = document.getElementById('carrosListContainer');
-            const paginationControls = document.getElementById('paginationControlsCarros');
+            const q = state.search.carros.q;
+            const url = `${API_BASE_URL}/carros/search?q=${q}&page=${page}&size=5&sort=modelo&direction=asc`;
+            const container = document.getElementById('carrosListContainer');
+            container.innerHTML = 'Carregando...';
 
-            listContainer.innerHTML = `<div id="loadingIndicator" class="text-center p-8 text-slate-500">Buscando Carros...</div>`;
-            paginationControls.innerHTML = '';
-            state.currentPage = page;
-            
             try {
-                const url = `${API_BASE_URL}/carros/search?q=${q}&page=${page}&size=4&sort=${sort}&direction=${direction}`;
                 const data = await apiFetch(url);
-                state.totalPages = data.TotalPages || 1;
+                const lista = data.Carros || data.content || [];
+                state.totalPages = data.TotalPages || data.totalPages || 1;
 
-                if (data.Carros.length === 0) {
-                    listContainer.innerHTML = `<div class="text-center p-8 text-slate-500">Nenhum carro encontrado.</div>`;
+                if(lista.length === 0) {
+                    container.innerHTML = 'Nenhum carro encontrado.';
                     return;
                 }
 
-                listContainer.innerHTML = `
-                    <table class="min-w-full bg-white rounded-lg shadow-md">
-                        <thead>
-                            <tr class="bg-gray-200 text-left text-slate-600 uppercase text-sm leading-normal">
-                                <th class="py-3 px-6">ID</th>
-                                <th class="py-3 px-6">Modelo</th>
-                                <th class="py-3 px-6">País de Montagem</th>
-                                <th class="py-3 px-6">Data Fabr.</th>
-                                <th class="py-3 px-6">Ações</th>
-                            </tr>
-                        </thead>
-                        <tbody class="text-slate-600 text-sm font-light">
-                            ${data.Carros.map(c => `
-                                <tr class="border-b border-gray-200 hover:bg-gray-50">
-                                    <td class="py-3 px-6 whitespace-nowrap">${c.id}</td>
-                                    <td class="py-3 px-6">${c.modelo}</td>
-                                    <td class="py-3 px-6">${c.paisDeMontagem}</td>
-                                    <td class="py-3 px-6">${c.dataDeFabricacao || 'N/A'}</td>
-                                    <td class="py-3 px-6 flex space-x-2">
-                                        <button onclick="router('carros', 'form', ${c.id})" class="bg-warning hover:bg-amber-600 text-white font-bold py-1 px-3 rounded-lg text-xs transition duration-150">Editar</button>
-                                        <button onclick="handleCarroDelete(${c.id})" class="bg-danger hover:bg-red-600 text-white font-bold py-1 px-3 rounded-lg text-xs transition duration-150">Excluir</button>
-                                    </td>
-                                </tr>
-                            `).join('')}
-                        </tbody>
-                    </table>
-                `;
+                let html = `<table class="min-w-full bg-white shadow-md rounded-lg">
+                    <thead><tr class="bg-gray-200 text-sm text-slate-600 uppercase"><th class="p-3 text-left">Modelo</th><th class="p-3 text-left">País</th><th class="p-3 text-left">Ações</th></tr></thead><tbody>`;
                 
-                renderPagination('paginationControlsCarros', 'carros', state.totalPages, state.currentPage);
-
-            } catch (error) {
-                listContainer.innerHTML = `<div class="text-center p-8 text-danger font-semibold">Erro ao carregar carros: ${error.message}</div>`;
+                lista.forEach(c => {
+                    html += `<tr class="border-b hover:bg-gray-50">
+                        <td class="p-3">${c.modelo}</td>
+                        <td class="p-3">${c.paisDeMontagem}</td>
+                        <td class="p-3 flex gap-2">
+                            <button onclick="router('carros','form',${c.id})" class="bg-warning text-white px-2 py-1 rounded text-xs">Editar</button>
+                            <button onclick="handleCarroDelete(${c.id})" class="bg-danger text-white px-2 py-1 rounded text-xs">Excluir</button>
+                        </td></tr>`;
+                });
+                html += '</tbody></table>';
+                container.innerHTML = html;
+                renderPagination('paginationControlsCarros', 'carros', state.totalPages, page);
+            } catch (err) {
+                container.innerHTML = 'Erro ao buscar carros.';
             }
         }
 
         async function renderCarroForm() {
-            // ... (Função renderCarroForm mantida igual - OK)
-            const content = document.getElementById('content');
             const isEditing = state.entityId !== null;
-            
-            content.innerHTML = `<div id="loadingIndicator" class="text-center p-8 text-slate-500">Preparando formulário...</div>`;
-            
-            let initialData = { fichaTecnica: {} };
-            if (isEditing) {
+            const content = document.getElementById('content');
+            content.innerHTML = 'Carregando...';
+
+            let data = { fichaTecnica: {} };
+            if(isEditing) {
                 try {
-                    initialData = await apiFetch(`${API_BASE_URL}/carros/${state.entityId}`);
-                    // Garante que fichaTecnica não é nula
-                    initialData.fichaTecnica = initialData.fichaTecnica || {}; 
-                } catch (error) {
-                    showToast(`Erro ao carregar Carro ID ${state.entityId}.`, 'danger');
-                    router('carros');
-                    return;
-                }
+                    data = await apiFetch(`${API_BASE_URL}/carros/${state.entityId}`);
+                    data.fichaTecnica = data.fichaTecnica || {};
+                } catch(e) { router('carros'); return; }
             }
 
-            const title = isEditing ? `Editar Carro ID ${state.entityId}` : 'Novo Carro';
-
             content.innerHTML = `
-                <h2 class="text-3xl font-bold mb-6 text-slate-800 border-b pb-2">${title}</h2>
-                <form id="carroForm" class="space-y-6 max-w-3xl mx-auto">
-                    
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <label class="block">
-                            <span class="text-slate-700">Modelo <span class="text-danger">*</span></span>
-                            <input type="text" id="modelo" required maxlength="100" minlength="2" class="mt-1 block w-full p-2 border border-gray-300 rounded-lg focus:border-primary" value="${initialData.modelo || ''}">
-                        </label>
-                        
-                        <label class="block">
-                            <span class="text-slate-700">País de Montagem <span class="text-danger">*</span></span>
-                            <input type="text" id="paisDeMontagem" required maxlength="80" class="mt-1 block w-full p-2 border border-gray-300 rounded-lg focus:border-primary" value="${initialData.paisDeMontagem || ''}">
-                        </label>
-
-                        <label class="block">
-                            <span class="text-slate-700">Nome Completo da Versão</span>
-                            <input type="text" id="nomeCompletoVersao" class="mt-1 block w-full p-2 border border-gray-300 rounded-lg focus:border-primary" value="${initialData.nomeCompletoVersao || ''}">
-                        </label>
-
-                        <label class="block">
-                            <span class="text-slate-700">Data de Fabricação</span>
-                            <input type="date" id="dataDeFabricacao" class="mt-1 block w-full p-2 border border-gray-300 rounded-lg focus:border-primary" value="${initialData.dataDeFabricacao || ''}">
-                        </label>
+                <h2 class="text-3xl font-bold mb-6">${isEditing ? 'Editar' : 'Novo'} Carro</h2>
+                <form id="carroForm" class="space-y-4 max-w-3xl mx-auto">
+                    <div class="grid grid-cols-2 gap-4">
+                        <label class="block"><span>Modelo *</span><input type="text" name="modelo" required class="w-full p-2 border rounded" value="${data.modelo||''}"></label>
+                        <label class="block"><span>País *</span><input type="text" name="pais" required class="w-full p-2 border rounded" value="${data.paisDeMontagem||''}"></label>
+                        <label class="block"><span>Versão Completa</span><input type="text" name="versao" class="w-full p-2 border rounded" value="${data.nomeCompletoVersao||''}"></label>
+                        <label class="block"><span>Data Fabricação</span><input type="date" name="dataFab" class="w-full p-2 border rounded" value="${formatDateForInput(data.dataDeFabricacao)}"></label>
                     </div>
-
-                    <div class="p-5 border border-gray-200 rounded-lg bg-gray-50 shadow-inner">
-                        <h3 class="text-xl font-semibold mb-4 text-slate-700 border-b pb-2">Ficha Técnica</h3>
-                        
-                        <label class="block mb-4">
-                            <span class="text-slate-700">Detalhes do Motor</span>
-                            <textarea id="detalhesDoMotor" maxlength="2000" rows="3" class="mt-1 block w-full p-2 border border-gray-300 rounded-lg focus:border-primary">${initialData.fichaTecnica.detalhesDoMotor || ''}</textarea>
-                        </label>
-                        
-                        <label class="block mb-4">
-                            <span class="text-slate-700">Tipo de Combustível</span>
-                            <input type="text" id="tipoDeCombustivel" maxlength="200" class="mt-1 block w-full p-2 border border-gray-300 rounded-lg focus:border-primary" value="${initialData.fichaTecnica.tipoDeCombustivel || ''}">
-                        </label>
-
-                        <label class="block">
-                            <span class="text-slate-700">Opcionais de Fábrica</span>
-                            <textarea id="opcionaisDeFabrica" rows="3" class="mt-1 block w-full p-2 border border-gray-300 rounded-lg focus:border-primary">${initialData.fichaTecnica.opcionaisDeFabrica || ''}</textarea>
-                        </label>
+                    <div class="bg-gray-50 p-4 rounded border">
+                        <h3 class="font-bold mb-2">Ficha Técnica</h3>
+                        <label class="block mb-2"><span>Motor</span><input type="text" name="motor" class="w-full p-2 border rounded" value="${data.fichaTecnica.detalhesDoMotor||''}"></label>
+                        <label class="block mb-2"><span>Combustível</span><input type="text" name="combustivel" class="w-full p-2 border rounded" value="${data.fichaTecnica.tipoDeCombustivel||''}"></label>
+                        <label class="block"><span>Opcionais</span><textarea name="opcionais" class="w-full p-2 border rounded">${data.fichaTecnica.opcionaisDeFabrica||''}</textarea></label>
                     </div>
-
-                    <div class="flex justify-end space-x-3 pt-4">
-                        <button type="button" onclick="router('carros')" class="bg-secondary hover:bg-slate-700 text-white font-bold py-2 px-4 rounded-lg transition duration-150">Cancelar</button>
-                        <button type="submit" class="bg-primary hover:bg-teal-700 text-white font-bold py-2 px-4 rounded-lg transition duration-150">
-                            ${isEditing ? 'Salvar Alterações' : 'Criar Carro'}
-                        </button>
+                    <div class="flex justify-end gap-2">
+                        <button type="button" onclick="router('carros')" class="bg-gray-400 text-white px-4 py-2 rounded">Cancelar</button>
+                        <button type="submit" class="bg-primary text-white px-4 py-2 rounded">Salvar</button>
                     </div>
                 </form>
             `;
 
-            document.getElementById('carroForm').addEventListener('submit', handleCarroSubmit);
-        }
+            document.getElementById('carroForm').onsubmit = async (e) => {
+                e.preventDefault();
+                const f = e.target;
+                const payload = {
+                    modelo: f.modelo.value,
+                    paisDeMontagem: f.pais.value,
+                    nomeCompletoVersao: f.versao.value,
+                    dataDeFabricacao: f.dataFab.value || null,
+                    fichaTecnica: {
+                        detalhesDoMotor: f.motor.value,
+                        tipoDeCombustivel: f.combustivel.value,
+                        opcionaisDeFabrica: f.opcionais.value
+                    }
+                };
+                if(isEditing) payload.id = state.entityId;
 
-        /**
-         * Lida com o envio do formulário de Carro (POST ou PUT), incluindo Ficha Técnica aninhada.
-         */
-        async function handleCarroSubmit(event) {
-            // ... (Função handleCarroSubmit mantida igual - OK)
-            event.preventDefault();
-            const isEditing = state.entityId !== null;
-            
-            const form = event.target;
-            const modelo = form.modelo.value.trim();
-            const paisDeMontagem = form.paisDeMontagem.value.trim();
-            
-            if (!modelo || !paisDeMontagem) {
-                showToast("Modelo e País de Montagem são campos obrigatórios.", 'warning');
-                return;
-            }
-
-            // 1. Constrói o objeto Ficha Tecnica
-            const fichaTecnicaPayload = {
-                detalhesDoMotor: form.detalhesDoMotor.value || null,
-                tipoDeCombustivel: form.tipoDeCombustivel.value || null,
-                opcionaisDeFabrica: form.opcionaisDeFabrica.value || null,
+                try {
+                    await apiFetch(isEditing ? `${API_BASE_URL}/carros/${state.entityId}` : `${API_BASE_URL}/carros`, {
+                        method: isEditing ? 'PUT' : 'POST',
+                        headers: {'Content-Type':'application/json'},
+                        body: JSON.stringify(payload)
+                    });
+                    showToast('Sucesso!', 'success');
+                    router('carros');
+                } catch(err) { showToast(err.message, 'danger'); }
             };
-            
-            // 2. Constrói o Payload principal do Carro
-            const payload = {
-                modelo: modelo,
-                paisDeMontagem: paisDeMontagem,
-                nomeCompletoVersao: form.nomeCompletoVersao.value || null,
-                dataDeFabricacao: form.dataDeFabricacao.value || null,
-                fichaTecnica: fichaTecnicaPayload,
-            };
-            
-            // Se estiver editando, o ID do Carro é mantido (a API fará o mapeamento da Ficha Técnica se necessário)
-            if (isEditing) {
-                payload.id = state.entityId;
-            }
-
-            const method = isEditing ? 'PUT' : 'POST';
-            const url = isEditing ? `${API_BASE_URL}/carros/${state.entityId}` : `${API_BASE_URL}/carros`;
-            let successMessage = isEditing ? 'Carro atualizado com sucesso!' : 'Carro criado com sucesso!';
-            
-            try {
-                await apiFetch(url, {
-                    method: method,
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
-                
-                showToast(successMessage, 'success');
-                router('carros');
-            } catch (error) {
-                showToast(`Falha ao salvar carro: ${error.message}`, 'danger');
-            }
         }
 
         function handleCarroDelete(id) {
-            // ... (Função handleCarroDelete mantida igual - OK)
-            showConfirmationModal(
-                'Confirmar Exclusão de Carro',
-                `Você tem certeza que deseja excluir o Carro ID ${id}? (Pode haver conflito se houver acessórios vinculados - 409)`,
-                async () => {
-                    try {
-                        await apiFetch(`${API_BASE_URL}/carros/${id}`, { method: 'DELETE' });
-                        showToast(`Carro ID ${id} excluído com sucesso.`, 'success');
-                        fetchCarros(0);
-                    } catch (error) {
-                         // O erro 409 retorna a mensagem no corpo
-                        showToast(`Falha ao excluir carro: ${error.message}`, 'danger');
-                    }
+             showConfirmationModal('Excluir Carro', 'Isso pode falhar se houver acessórios vinculados.', async () => {
+                try {
+                    await apiFetch(`${API_BASE_URL}/carros/${id}`, { method: 'DELETE' });
+                    showToast("Excluído!", 'success');
+                    fetchCarros(state.currentPage);
+                } catch (err) {
+                    showToast(err.message, 'danger'); // Mostra erro 409 se houver
                 }
-            );
+            });
         }
 
-        // --- 8. VIEWS (FABRICANTES - AJUSTADAS COM PAGINAÇÃO E PESQUISA) ---
-
+        // --- 8. FABRICANTES (Mantido estrutura similar) ---
         function renderFabricantesList(page = 0) {
-            const content = document.getElementById('content');
-            content.innerHTML = `
-                <h2 class="text-3xl font-bold mb-6 text-slate-800 border-b pb-2">Lista de Fabricantes</h2>
-                <div class="flex flex-wrap gap-4 mb-6 items-center">
-                    <input type="text" id="fabricanteSearchInput" placeholder="Buscar por nome ou detalhes" class="p-3 border border-gray-300 rounded-lg flex-grow min-w-40" value="${state.search.fabricantes.q}">
-                    <select id="fabricanteSortSelect" class="p-3 border border-gray-300 rounded-lg">
-                        <option value="id" ${state.search.fabricantes.sort === 'id' ? 'selected' : ''}>ID</option>
-                        <option value="nome" ${state.search.fabricantes.sort === 'nome' ? 'selected' : ''}>Nome</option>
-                    </select>
-                    <select id="fabricanteDirectionSelect" class="p-3 border border-gray-300 rounded-lg">
-                        <option value="asc" ${state.search.fabricantes.direction === 'asc' ? 'selected' : ''}>Crescente</option>
-                        <option value="desc" ${state.search.fabricantes.direction === 'desc' ? 'selected' : ''}>Decrescente</option>
-                    </select>
-                    <button onclick="updateFabricanteSearchParams(0)" class="bg-primary hover:bg-teal-700 text-white font-bold py-3 px-6 rounded-lg transition duration-150 shadow-md">Pesquisar</button>
-                    <button onclick="router('fabricantes', 'form')" class="bg-success hover:bg-emerald-700 text-white font-bold py-3 px-6 rounded-lg transition duration-150 shadow-md ml-auto">Novo Fabricante</button>
+            window.updateFabricanteSearchParams = (p) => {
+                state.search.fabricantes.q = document.getElementById('fabSearchInput').value;
+                fetchFabricantes(p);
+            };
+            document.getElementById('content').innerHTML = `
+                <h2 class="text-3xl font-bold mb-6 text-slate-800 border-b pb-2">Fabricantes</h2>
+                <div class="flex gap-4 mb-6">
+                    <input type="text" id="fabSearchInput" placeholder="Nome..." class="p-3 border rounded-lg flex-grow" value="${state.search.fabricantes.q}">
+                    <button onclick="updateFabricanteSearchParams(0)" class="bg-primary text-white px-6 rounded-lg font-bold">Buscar</button>
+                    <button onclick="router('fabricantes', 'form')" class="bg-success text-white px-6 rounded-lg font-bold ml-auto">Novo</button>
                 </div>
-                <div id="fabricantesListContainer" class="overflow-x-auto">
-                    <div id="loadingIndicator" class="text-center p-8 text-slate-500">Carregando...</div>
-                </div>
+                <div id="fabListContainer"></div>
                 <div id="paginationControlsFabricantes" class="flex justify-center gap-2 mt-6"></div>
             `;
-            document.getElementById('fabricanteSearchInput').addEventListener('keydown', (e) => {
-                if (e.key === 'Enter') updateFabricanteSearchParams(0);
-            });
-            document.getElementById('fabricanteSortSelect').addEventListener('change', () => updateFabricanteSearchParams(0));
-            document.getElementById('fabricanteDirectionSelect').addEventListener('change', () => updateFabricanteSearchParams(0));
-            
-            window.updateFabricanteSearchParams = (page) => {
-                state.search.fabricantes.q = document.getElementById('fabricanteSearchInput').value;
-                state.search.fabricantes.sort = document.getElementById('fabricanteSortSelect').value;
-                state.search.fabricantes.direction = document.getElementById('fabricanteDirectionSelect').value;
-                fetchFabricantes(page);
-            };
-
             fetchFabricantes(page);
         }
 
         async function fetchFabricantes(page) {
-            const { q, sort, direction } = state.search.fabricantes;
-            const listContainer = document.getElementById('fabricantesListContainer');
-            const paginationControls = document.getElementById('paginationControlsFabricantes');
-
-            listContainer.innerHTML = `<div id="loadingIndicator" class="text-center p-8 text-slate-500">Buscando Fabricantes...</div>`;
-            paginationControls.innerHTML = '';
-            state.currentPage = page;
-
-            try {
-                const url = `${API_BASE_URL}/fabricantes/search?q=${q}&page=${page}&size=4&sort=${sort}&direction=${direction}`;
-                const data = await apiFetch(url);
-                state.totalPages = data.TotalPages || 1;
-
-
-                if (data.Fabricantes.length === 0) {
-                    listContainer.innerHTML = `<div class="text-center p-8 text-slate-500">Nenhum fabricante encontrado.</div>`;
-                    return;
-                }
-
-                listContainer.innerHTML = `
-                    <table class="min-w-full bg-white rounded-lg shadow-md">
-                        <thead>
-                            <tr class="bg-gray-200 text-left text-slate-600 uppercase text-sm leading-normal">
-                                <th class="py-3 px-6">ID</th>
-                                <th class="py-3 px-6">Nome</th>
-                                <th class="py-3 px-6">Detalhes</th>
-                                <th class="py-3 px-6">Ações</th>
-                            </tr>
-                        </thead>
-                        <tbody class="text-slate-600 text-sm font-light">
-                            ${data.Fabricantes.map(f => `
-                                <tr class="border-b border-gray-200 hover:bg-gray-50">
-                                    <td class="py-3 px-6 whitespace-nowrap">${f.id}</td>
-                                    <td class="py-3 px-6">${f.nome}</td>
-                                    <td class="py-3 px-6">${f.detalhes || 'N/A'}</td>
-                                    <td class="py-3 px-6 flex space-x-2">
-                                        <button onclick="router('fabricantes', 'form', ${f.id})" class="bg-warning hover:bg-amber-600 text-white font-bold py-1 px-3 rounded-lg text-xs transition duration-150">Editar</button>
-                                        <button onclick="handleFabricanteDelete(${f.id})" class="bg-danger hover:bg-red-600 text-white font-bold py-1 px-3 rounded-lg text-xs transition duration-150">Excluir</button>
-                                    </td>
-                                </tr>
-                            `).join('')}
-                        </tbody>
-                    </table>
-                `;
-                
-                renderPagination('paginationControlsFabricantes', 'fabricantes', state.totalPages, state.currentPage);
-
-            } catch (error) {
-                listContainer.innerHTML = `<div class="text-center p-8 text-danger font-semibold">Erro ao carregar fabricantes: ${error.message}</div>`;
-            }
-        }
-        
-        async function renderFabricanteForm() {
-            // ... (Função renderFabricanteForm mantida igual - OK)
-            const content = document.getElementById('content');
-            const isEditing = state.entityId !== null;
+            const q = state.search.fabricantes.q;
+            const url = `${API_BASE_URL}/fabricantes/search?q=${q}&page=${page}&size=5&sort=nome&direction=asc`;
+            const container = document.getElementById('fabListContainer');
             
-            let initialData = {};
-            if (isEditing) {
-                 try {
-                    initialData = await apiFetch(`${API_BASE_URL}/fabricantes/${state.entityId}`);
-                } catch (error) {
-                    showToast(`Erro ao carregar Fabricante ID ${state.entityId}.`, 'danger');
-                    router('fabricantes');
-                    return;
-                }
+            try {
+                const data = await apiFetch(url);
+                const lista = data.Fabricantes || data.content || [];
+                state.totalPages = data.TotalPages || data.totalPages || 1;
+
+                if(lista.length === 0) { container.innerHTML = 'Nada encontrado.'; return; }
+
+                let html = `<table class="min-w-full bg-white rounded shadow"><thead><tr class="bg-gray-200 text-slate-600 uppercase text-sm"><th class="p-3 text-left">Nome</th><th class="p-3 text-left">Detalhes</th><th class="p-3 text-left">Ações</th></tr></thead><tbody>`;
+                lista.forEach(f => {
+                    html += `<tr class="border-b hover:bg-gray-50"><td class="p-3">${f.nome}</td><td class="p-3">${f.detalhes||'-'}</td>
+                    <td class="p-3 flex gap-2">
+                        <button onclick="router('fabricantes','form',${f.id})" class="bg-warning text-white px-2 py-1 rounded text-xs">Editar</button>
+                        <button onclick="handleFabricanteDelete(${f.id})" class="bg-danger text-white px-2 py-1 rounded text-xs">Excluir</button>
+                    </td></tr>`;
+                });
+                container.innerHTML = html + '</tbody></table>';
+                renderPagination('paginationControlsFabricantes', 'fabricantes', state.totalPages, page);
+            } catch(e) { container.innerHTML = 'Erro ao carregar.'; }
+        }
+
+        async function renderFabricanteForm() {
+            const isEditing = state.entityId !== null;
+            let data = {};
+            if(isEditing) {
+                try { data = await apiFetch(`${API_BASE_URL}/fabricantes/${state.entityId}`); } 
+                catch(e) { router('fabricantes'); return; }
             }
-
-            const title = isEditing ? `Editar Fabricante ID ${state.entityId}` : 'Novo Fabricante';
-
-            content.innerHTML = `
-                <h2 class="text-3xl font-bold mb-6 text-slate-800 border-b pb-2">${title}</h2>
-                <form id="fabricanteForm" class="space-y-4 max-w-xl mx-auto">
-                    <label class="block">
-                        <span class="text-slate-700">Nome <span class="text-danger">*</span></span>
-                        <input type="text" id="nome" required maxlength="50" minlength="2" class="mt-1 block w-full p-2 border border-gray-300 rounded-lg focus:border-primary" value="${initialData.nome || ''}">
-                    </label>
-                    
-                    <label class="block">
-                        <span class="text-slate-700">Detalhes</span>
-                        <textarea id="detalhes" maxlength="200" rows="2" class="mt-1 block w-full p-2 border border-gray-300 rounded-lg focus:border-primary">${initialData.detalhes || ''}</textarea>
-                    </label>
-
-                    <div class="flex justify-end space-x-3 pt-4">
-                        <button type="button" onclick="router('fabricantes')" class="bg-secondary hover:bg-slate-700 text-white font-bold py-2 px-4 rounded-lg transition duration-150">Cancelar</button>
-                        <button type="submit" class="bg-primary hover:bg-teal-700 text-white font-bold py-2 px-4 rounded-lg transition duration-150">
-                            ${isEditing ? 'Salvar Alterações' : 'Criar Fabricante'}
-                        </button>
+            document.getElementById('content').innerHTML = `
+                <h2 class="text-3xl font-bold mb-6">${isEditing?'Editar':'Novo'} Fabricante</h2>
+                <form id="fabForm" class="max-w-lg mx-auto space-y-4">
+                    <label class="block"><span>Nome *</span><input required name="nome" class="w-full p-2 border rounded" value="${data.nome||''}"></label>
+                    <label class="block"><span>Detalhes</span><textarea name="detalhes" class="w-full p-2 border rounded">${data.detalhes||''}</textarea></label>
+                    <div class="flex justify-end gap-2 pt-4">
+                        <button type="button" onclick="router('fabricantes')" class="bg-gray-400 text-white px-4 py-2 rounded">Cancelar</button>
+                        <button type="submit" class="bg-primary text-white px-4 py-2 rounded">Salvar</button>
                     </div>
                 </form>
             `;
-
-            document.getElementById('fabricanteForm').addEventListener('submit', handleFabricanteSubmit);
-        }
-
-        async function handleFabricanteSubmit(event) {
-            // ... (Função handleFabricanteSubmit mantida igual - OK)
-            event.preventDefault();
-            const isEditing = state.entityId !== null;
-            
-            const form = event.target;
-            const nome = form.nome.value.trim();
-            const detalhes = form.detalhes.value;
-
-            if (!nome) {
-                showToast("O campo Nome é obrigatório.", 'warning');
-                return;
-            }
-
-            const payload = {
-                nome: nome,
-                detalhes: detalhes || null
+            document.getElementById('fabForm').onsubmit = async(e) => {
+                e.preventDefault();
+                const payload = { nome: e.target.nome.value, detalhes: e.target.detalhes.value };
+                if(isEditing) payload.id = state.entityId;
+                try {
+                    await apiFetch(isEditing?`${API_BASE_URL}/fabricantes/${state.entityId}`:`${API_BASE_URL}/fabricantes`, {
+                        method: isEditing?'PUT':'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)
+                    });
+                    showToast('Salvo!', 'success'); router('fabricantes');
+                } catch(err) { showToast(err.message, 'danger'); }
             };
-            
-            const method = isEditing ? 'PUT' : 'POST';
-            const url = isEditing ? `${API_BASE_URL}/fabricantes/${state.entityId}` : `${API_BASE_URL}/fabricantes`;
-            let successMessage = isEditing ? 'Fabricante atualizado com sucesso!' : 'Fabricante criado com sucesso!';
-            
-            try {
-                await apiFetch(url, {
-                    method: method,
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
-                
-                showToast(successMessage, 'success');
-                router('fabricantes');
-            } catch (error) {
-                showToast(`Falha ao salvar fabricante: ${error.message}`, 'danger');
-            }
         }
-        
+
         function handleFabricanteDelete(id) {
-            // ... (Função handleFabricanteDelete mantida igual - OK)
-            showConfirmationModal(
-                'Confirmar Exclusão de Fabricante',
-                `Você tem certeza que deseja excluir o Fabricante ID ${id}? (Pode haver conflito se houver acessórios vinculados - 409)`,
-                async () => {
-                    try {
-                        await apiFetch(`${API_BASE_URL}/fabricantes/${id}`, { method: 'DELETE' });
-                        showToast(`Fabricante ID ${id} excluído com sucesso.`, 'success');
-                        fetchFabricantes(0);
-                    } catch (error) {
-                        showToast(`Falha ao excluir fabricante: ${error.message}`, 'danger');
-                    }
-                }
-            );
+            showConfirmationModal('Excluir', 'Confirmar?', async() => {
+                try { await apiFetch(`${API_BASE_URL}/fabricantes/${id}`, {method:'DELETE'}); showToast('Excluído','success'); fetchFabricantes(state.currentPage); }
+                catch(e) { showToast(e.message, 'danger'); }
+            });
         }
 
-
-        // --- 9. INICIALIZAÇÃO ---
-        window.onload = () => router('acessorios'); 
+        // --- INICIALIZAÇÃO ---
+        window.onload = () => router('acessorios');
     </script>
 </body>
 </html>
