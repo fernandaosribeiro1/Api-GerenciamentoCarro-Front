@@ -4,19 +4,22 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>API Gerenciamento de Carros</title>
+    
     <script src="https://cdn.tailwindcss.com"></script>
+    
     <script>
+        // Configuração de cores do Tailwind
         tailwind.config = {
             theme: {
                 extend: {
                     colors: {
-                        'primary': '#0d9488', // Teal-600
-                        'secondary': '#475569', // Slate-600
-                        'success': '#10b981', // Emerald-500
-                        'danger': '#ef4444', // Red-500
-                        'warning': '#f59e0b', // Amber-500
-                        'info': '#38bdf8', // Sky-400
-                        'background-light': '#f8fafc', // Slate-50
+                        'primary': '#0d9488', // Teal
+                        'secondary': '#475569', // Slate
+                        'success': '#10b981', // Emerald
+                        'danger': '#ef4444', // Red
+                        'warning': '#f59e0b', // Amber
+                        'info': '#38bdf8', // Sky
+                        'background-light': '#f8fafc',
                     },
                 }
             }
@@ -24,13 +27,8 @@
     </script>
     <style>
         .h-32 { height: 8rem; }
-        .overflow-x-auto::-webkit-scrollbar {
-            height: 8px;
-        }
-        .overflow-x-auto::-webkit-scrollbar-thumb {
-            background-color: #cbd5e1;
-            border-radius: 10px;
-        }
+        .overflow-x-auto::-webkit-scrollbar { height: 8px; }
+        .overflow-x-auto::-webkit-scrollbar-thumb { background-color: #cbd5e1; border-radius: 10px; }
     </style>
 </head>
 <body class="bg-background-light min-h-screen text-slate-800">
@@ -48,7 +46,7 @@
 
         <main id="content" class="bg-white p-6 rounded-lg shadow-xl min-h-[60vh]">
             <div class="text-center text-slate-500 mt-20">
-                Selecione uma entidade no menu acima para começar a gerenciar.
+                Carregando aplicação...
             </div>
         </main>
 
@@ -69,7 +67,8 @@
     <script>
         // --- 1. CONFIGURAÇÕES GLOBAIS ---
         const API_BASE_URL = 'https://api-gerenciamentocarro-final.onrender.com/api/v1';
-        const MAX_RETRIES = 2; // Reduzido para testes mais rápidos
+        const MAX_RETRIES = 1; 
+        
         const state = {
             currentView: '',
             mode: 'list',
@@ -77,8 +76,8 @@
             entityId: null,
             currentPage: 0,
             totalPages: 1,
-            carros: [],
-            fabricantes: [],
+            carros: [], // Cache para selects
+            fabricantes: [], // Cache para selects
             search: {
                 acessorios: { q: '', sort: 'id', direction: 'asc' },
                 carros: { q: '', sort: 'id', direction: 'asc' },
@@ -86,17 +85,20 @@
             }
         };
 
-        // --- FUNÇÃO UTILITÁRIA DE DATA ---
-        // Remove a parte da hora se existir, para funcionar no input type="date"
+        // --- 2. UTILITÁRIOS ---
+        
+        // Formata data para input HTML (yyyy-MM-dd)
         function formatDateForInput(dateString) {
             if (!dateString) return '';
             return dateString.split('T')[0];
         }
 
-        // --- 2. SERVIÇO DE API ---
+        // --- 3. SERVIÇO DE API ---
         async function apiFetch(url, options = {}, retries = 0) {
             try {
                 const response = await fetch(url, options);
+
+                // Tratamento para DELETE bem sucedido (sem conteúdo)
                 if (response.status === 204) return null;
 
                 const contentType = response.headers.get("content-type");
@@ -106,43 +108,39 @@
                     data = await response.json();
                 } else if (contentType && contentType.indexOf("text/plain") !== -1) {
                     data = await response.text();
-                } else {
-                    data = {};
                 }
 
                 if (!response.ok) {
                     if (response.status === 409) {
-                        throw new Error(typeof data === 'string' ? data : "Conflito: Item em uso por outra entidade.");
+                        throw new Error("Não é possível excluir: Este item está vinculado a outros registros.");
                     }
-                    throw new Error(data?.message || response.statusText || "Erro desconhecido");
+                    throw new Error(data?.message || (typeof data === 'string' ? data : response.statusText) || "Erro na requisição");
                 }
                 return data;
+
             } catch (error) {
-                if (retries < MAX_RETRIES && options.method !== 'DELETE') { // Evita retry em DELETE perigoso
-                    const delay = Math.pow(2, retries) * 300;
-                    await new Promise(resolve => setTimeout(resolve, delay));
+                console.error("Erro API:", error);
+                if (retries < MAX_RETRIES && options.method !== 'DELETE') {
+                    await new Promise(resolve => setTimeout(resolve, 1000));
                     return apiFetch(url, options, retries + 1);
                 }
                 throw error;
             }
         }
 
-        // --- 3. UI E NOTIFICAÇÕES ---
+        // --- 4. INTERFACE (UI) ---
         function showToast(message, type = 'info') {
             const container = document.getElementById('toast-container');
-            const colorMap = {
-                success: 'bg-success',
-                danger: 'bg-danger',
-                warning: 'bg-warning text-slate-900',
-                info: 'bg-info'
-            };
+            const colors = { success: 'bg-success', danger: 'bg-danger', warning: 'bg-warning', info: 'bg-info' };
+            
             const toast = document.createElement('div');
-            toast.className = `p-4 rounded-lg shadow-2xl text-white font-semibold ${colorMap[type]} transition-all duration-300 transform translate-x-0 opacity-100`;
+            toast.className = `p-4 rounded-lg shadow-2xl text-white font-semibold ${colors[type]} mb-2 transition-all duration-500`;
             toast.textContent = message;
+            
             container.appendChild(toast);
             setTimeout(() => {
-                toast.classList.add('opacity-0', 'translate-x-full');
-                toast.addEventListener('transitionend', () => toast.remove());
+                toast.style.opacity = '0';
+                setTimeout(() => toast.remove(), 500);
             }, 4000);
         }
 
@@ -154,10 +152,9 @@
             const confirmBtn = document.getElementById('modal-confirm');
             const cancelBtn = document.getElementById('modal-cancel');
 
-            // Clone nodes to remove old event listeners
+            // Clona para remover eventos antigos
             const newConfirm = confirmBtn.cloneNode(true);
             const newCancel = cancelBtn.cloneNode(true);
-            
             confirmBtn.parentNode.replaceChild(newConfirm, confirmBtn);
             cancelBtn.parentNode.replaceChild(newCancel, cancelBtn);
 
@@ -169,358 +166,353 @@
             modal.classList.remove('hidden');
         }
 
-        // --- 4. ROTEADOR ---
+        // --- 5. NAVEGAÇÃO ---
         function router(view, mode = 'list', id = null, page = 0) {
             state.currentView = view;
             state.mode = mode;
             state.entityId = id;
             state.currentPage = page;
 
+            // Atualiza botões do menu
             document.querySelectorAll('.nav-button').forEach(btn => {
-                btn.classList.remove('bg-primary', 'hover:bg-teal-700');
-                btn.classList.add('bg-secondary', 'hover:bg-slate-700');
-            });
-            
-            // Correção do seletor do botão ativo
-            const buttons = document.querySelectorAll('button[onclick^="router"]');
-            buttons.forEach(btn => {
-                if(btn.getAttribute('onclick').includes(`'${view}'`)) {
-                    btn.classList.add('bg-primary', 'hover:bg-teal-700');
+                if (btn.getAttribute('onclick').includes(`'${view}'`)) {
                     btn.classList.remove('bg-secondary', 'hover:bg-slate-700');
+                    btn.classList.add('bg-primary', 'hover:bg-teal-700');
+                } else {
+                    btn.classList.add('bg-secondary', 'hover:bg-slate-700');
+                    btn.classList.remove('bg-primary', 'hover:bg-teal-700');
                 }
             });
 
             switch (view) {
                 case 'acessorios':
-                    state.mode === 'list' ? renderAcessoriosList(page) : renderAcessorioForm();
+                    mode === 'list' ? renderAcessoriosList(page) : renderAcessorioForm();
                     break;
                 case 'carros':
-                    state.mode === 'list' ? renderCarrosList(page) : renderCarroForm();
+                    mode === 'list' ? renderCarrosList(page) : renderCarroForm();
                     break;
                 case 'fabricantes':
-                    state.mode === 'list' ? renderFabricantesList(page) : renderFabricanteForm();
+                    mode === 'list' ? renderFabricantesList(page) : renderFabricanteForm();
                     break;
             }
         }
 
-        // --- PAGINAÇÃO ---
         function renderPagination(containerId, viewName, totalPages, currentPage) {
             const container = document.getElementById(containerId);
             if (!container) return;
             container.innerHTML = '';
-            
-            // Limita botões se houver muitas páginas
-            const start = Math.max(0, currentPage - 2);
-            const end = Math.min(totalPages, start + 5);
 
-            for (let i = start; i < end; i++) {
+            if (totalPages <= 1) return;
+
+            const createBtn = (page, text) => {
                 const btn = document.createElement('button');
-                btn.textContent = i + 1;
+                btn.textContent = text;
+                btn.className = `py-2 px-4 rounded font-bold mx-1 ${page === currentPage ? 'bg-primary text-white' : 'bg-gray-200 text-slate-700 hover:bg-gray-300'}`;
                 btn.onclick = () => {
-                    if (viewName === 'acessorios') fetchAcessorios(i);
-                    else if (viewName === 'carros') fetchCarros(i);
-                    else if (viewName === 'fabricantes') fetchFabricantes(i);
+                    if (viewName === 'acessorios') fetchAcessorios(page);
+                    if (viewName === 'carros') fetchCarros(page);
+                    if (viewName === 'fabricantes') fetchFabricantes(page);
                 };
-                btn.className = `py-2 px-4 rounded-lg font-bold transition duration-150 ${i === currentPage ? 'bg-primary text-white' : 'bg-gray-200 text-slate-700 hover:bg-gray-300'}`;
                 container.appendChild(btn);
-            }
-        }
-
-        // --- 5. DADOS AUXILIARES (Corrigido para não usar /all) ---
-        async function fetchAllCarros() {
-            try {
-                // CORREÇÃO: Usa paginação grande em vez de /all para garantir compatibilidade
-                const data = await apiFetch(`${API_BASE_URL}/carros?page=0&size=1000`); 
-                // Verifica se a API retorna {content: [...]} ou array direto ou objeto paginado {Carros: [...]}
-                state.carros = data.content || data.Carros || data || [];
-            } catch (error) {
-                console.error(error);
-                showToast("Erro ao carregar lista de Carros.", 'danger');
-                state.carros = [];
-            }
-        }
-
-        async function fetchAllFabricantes() {
-            try {
-                const data = await apiFetch(`${API_BASE_URL}/fabricantes?page=0&size=1000`);
-                state.fabricantes = data.content || data.Fabricantes || data || [];
-            } catch (error) {
-                console.error(error);
-                showToast("Erro ao carregar lista de Fabricantes.", 'danger');
-                state.fabricantes = [];
-            }
-        }
-
-        // --- 6. ACESSÓRIOS ---
-        function renderAcessoriosList(page = 0) {
-            // Configura a função global para o botão de pesquisa
-            window.updateAcessorioSearchParams = (p) => {
-                state.search.acessorios.q = document.getElementById('acessorioSearchInput').value;
-                state.search.acessorios.sort = document.getElementById('acessorioSortSelect').value;
-                state.search.acessorios.direction = document.getElementById('acessorioDirectionSelect').value;
-                fetchAcessorios(p);
             };
 
+            // Lógica simples de paginação (apenas 5 botões)
+            let start = Math.max(0, currentPage - 2);
+            let end = Math.min(totalPages, start + 5);
+            
+            if (start > 0) createBtn(0, '1..');
+            for (let i = start; i < end; i++) createBtn(i, i + 1);
+            if (end < totalPages) createBtn(totalPages - 1, `..${totalPages}`);
+        }
+
+        // --- 6. CACHES DE DADOS (Dropdowns) ---
+        async function loadDropdownData() {
+            try {
+                // Carrega listas grandes para os selects
+                const [carrosData, fabData] = await Promise.all([
+                    apiFetch(`${API_BASE_URL}/carros?page=0&size=1000`),
+                    apiFetch(`${API_BASE_URL}/fabricantes?page=0&size=1000`)
+                ]);
+                state.carros = carrosData.content || carrosData.Carros || [];
+                state.fabricantes = fabData.content || fabData.Fabricantes || [];
+            } catch (e) {
+                console.warn("Erro ao carregar dropdowns:", e);
+            }
+        }
+
+        // =================================================================================
+        // --- MÓDULO: ACESSÓRIOS ---
+        // =================================================================================
+
+        function renderAcessoriosList(page = 0) {
             const content = document.getElementById('content');
             content.innerHTML = `
-                <h2 class="text-3xl font-bold mb-6 text-slate-800 border-b pb-2">Lista de Acessórios</h2>
-                <div class="flex flex-wrap gap-4 mb-6 items-center">
-                    <input type="text" id="acessorioSearchInput" placeholder="Buscar..." class="p-3 border border-gray-300 rounded-lg flex-grow" value="${state.search.acessorios.q}">
-                    <select id="acessorioSortSelect" class="p-3 border border-gray-300 rounded-lg">
-                        <option value="id" ${state.search.acessorios.sort === 'id' ? 'selected' : ''}>ID</option>
-                        <option value="nome" ${state.search.acessorios.sort === 'nome' ? 'selected' : ''}>Nome</option>
-                        <option value="valor" ${state.search.acessorios.sort === 'valor' ? 'selected' : ''}>Valor</option>
-                    </select>
-                    <select id="acessorioDirectionSelect" class="p-3 border border-gray-300 rounded-lg">
-                        <option value="asc" ${state.search.acessorios.direction === 'asc' ? 'selected' : ''}>Crescente</option>
-                        <option value="desc" ${state.search.acessorios.direction === 'desc' ? 'selected' : ''}>Decrescente</option>
-                    </select>
-                    <button onclick="updateAcessorioSearchParams(0)" class="bg-primary hover:bg-teal-700 text-white font-bold py-3 px-6 rounded-lg shadow-md">Pesquisar</button>
-                    <button onclick="router('acessorios', 'form')" class="bg-success hover:bg-emerald-700 text-white font-bold py-3 px-6 rounded-lg shadow-md ml-auto">Novo</button>
-                </div>
-                <div id="acessoriosListContainer" class="overflow-x-auto"></div>
-                <div id="paginationControlsAcessorios" class="flex justify-center gap-2 mt-6"></div>
-            `;
+                <div class="flex flex-col space-y-4">
+                    <h2 class="text-2xl font-bold text-slate-800 border-b pb-2">Acessórios</h2>
+                    
+                    <div class="flex flex-wrap gap-2 items-end bg-gray-50 p-4 rounded-lg border">
+                        <div class="flex-grow">
+                            <label class="text-xs font-bold text-slate-500">Buscar</label>
+                            <input type="text" id="searchQ" class="w-full p-2 border rounded" placeholder="Nome..." value="${state.search.acessorios.q}">
+                        </div>
+                        <div>
+                            <label class="text-xs font-bold text-slate-500">Ordenar</label>
+                            <select id="searchSort" class="p-2 border rounded">
+                                <option value="id">ID</option>
+                                <option value="nome">Nome</option>
+                                <option value="valor">Valor</option>
+                            </select>
+                        </div>
+                         <div>
+                            <label class="text-xs font-bold text-slate-500">Direção</label>
+                            <select id="searchDir" class="p-2 border rounded">
+                                <option value="asc">Cresc.</option>
+                                <option value="desc">Decresc.</option>
+                            </select>
+                        </div>
+                        <button onclick="applySearchAcessorios()" class="bg-primary text-white px-4 py-2 rounded font-bold hover:bg-teal-700">Filtrar</button>
+                        <button onclick="router('acessorios', 'form')" class="bg-success text-white px-4 py-2 rounded font-bold hover:bg-emerald-600 ml-auto">Novo</button>
+                    </div>
 
-            // Bind do Enter
-            document.getElementById('acessorioSearchInput').addEventListener('keydown', (e) => {
-                if (e.key === 'Enter') updateAcessorioSearchParams(0);
-            });
+                    <div id="listContainer" class="overflow-x-auto bg-white rounded shadow">
+                        <div class="p-8 text-center text-gray-500">Carregando...</div>
+                    </div>
+                    
+                    <div id="pagContainer" class="flex justify-center pt-4"></div>
+                </div>
+            `;
+            
+            // Restaura filtros salvos
+            document.getElementById('searchSort').value = state.search.acessorios.sort;
+            document.getElementById('searchDir').value = state.search.acessorios.direction;
+            
+            window.applySearchAcessorios = () => {
+                state.search.acessorios.q = document.getElementById('searchQ').value;
+                state.search.acessorios.sort = document.getElementById('searchSort').value;
+                state.search.acessorios.direction = document.getElementById('searchDir').value;
+                fetchAcessorios(0);
+            };
 
             fetchAcessorios(page);
         }
 
         async function fetchAcessorios(page) {
             const { q, sort, direction } = state.search.acessorios;
-            const listContainer = document.getElementById('acessoriosListContainer');
-            
-            listContainer.innerHTML = `<div class="text-center p-8 text-slate-500">Carregando...</div>`;
-            state.currentPage = page;
-
-            // Endpoint de busca
             const url = `${API_BASE_URL}/acessorios/search?q=${q}&page=${page}&size=5&sort=${sort}&direction=${direction}`;
-
+            
             try {
                 const data = await apiFetch(url);
-                // Ajuste para aceitar tanto Maiúscula quanto minúscula da API
-                const lista = data.Acessorios || data.acessorios || data.content || [];
+                const lista = data.Acessorios || data.content || [];
                 state.totalPages = data.TotalPages || data.totalPages || 1;
+                state.currentPage = page;
 
-                if (lista.length === 0) {
-                    listContainer.innerHTML = `<div class="text-center p-8 text-slate-500">Nenhum registro encontrado.</div>`;
+                const container = document.getElementById('listContainer');
+                
+                if(lista.length === 0) {
+                    container.innerHTML = '<div class="p-8 text-center text-gray-500">Nenhum registro encontrado.</div>';
+                    renderPagination('pagContainer', 'acessorios', 0, 0);
                     return;
                 }
 
                 let html = `
-                    <table class="min-w-full bg-white rounded-lg shadow-md">
+                    <table class="min-w-full w-full">
                         <thead>
-                            <tr class="bg-gray-200 text-slate-600 text-sm uppercase">
-                                <th class="py-3 px-6 text-left">ID</th>
-                                <th class="py-3 px-6 text-left">Nome</th>
-                                <th class="py-3 px-6 text-left">Valor</th>
-                                <th class="py-3 px-6 text-left">Carro</th>
-                                <th class="py-3 px-6 text-left">Ações</th>
+                            <tr class="bg-gray-100 text-slate-600 text-sm uppercase text-left">
+                                <th class="py-3 px-4">ID</th>
+                                <th class="py-3 px-4">Nome</th>
+                                <th class="py-3 px-4">Valor</th>
+                                <th class="py-3 px-4">Carro</th>
+                                <th class="py-3 px-4 text-right">Ações</th>
                             </tr>
                         </thead>
-                        <tbody class="text-slate-600 text-sm font-light">`;
+                        <tbody class="text-slate-700 text-sm">`;
                 
                 lista.forEach(item => {
                     html += `
-                        <tr class="border-b border-gray-200 hover:bg-gray-50">
-                            <td class="py-3 px-6">${item.id}</td>
-                            <td class="py-3 px-6 font-medium">${item.nome}</td>
-                            <td class="py-3 px-6">R$ ${item.valor ? item.valor.toFixed(2) : '0.00'}</td>
-                            <td class="py-3 px-6">${item.carro?.modelo || '-'}</td>
-                            <td class="py-3 px-6 flex space-x-2">
-                                <button onclick="router('acessorios', 'form', ${item.id})" class="bg-warning hover:bg-amber-600 text-white font-bold py-1 px-3 rounded text-xs">Editar</button>
-                                <button onclick="handleAcessorioDelete(${item.id})" class="bg-danger hover:bg-red-600 text-white font-bold py-1 px-3 rounded text-xs">Excluir</button>
+                        <tr class="border-b hover:bg-gray-50">
+                            <td class="py-3 px-4">${item.id}</td>
+                            <td class="py-3 px-4 font-medium">${item.nome}</td>
+                            <td class="py-3 px-4">R$ ${item.valor ? item.valor.toFixed(2) : '0.00'}</td>
+                            <td class="py-3 px-4 text-xs">${item.carro ? (item.carro.modelo + ' - ' + item.carro.paisDeMontagem) : '<span class="text-gray-400">Sem vínculo</span>'}</td>
+                            <td class="py-3 px-4 text-right space-x-2">
+                                <button onclick="router('acessorios', 'form', ${item.id})" class="bg-warning text-white px-2 py-1 rounded text-xs hover:bg-amber-600">Editar</button>
+                                <button onclick="deleteItem('acessorios', ${item.id}, fetchAcessorios)" class="bg-danger text-white px-2 py-1 rounded text-xs hover:bg-red-600">Excluir</button>
                             </td>
                         </tr>`;
                 });
+                
                 html += `</tbody></table>`;
-                listContainer.innerHTML = html;
-                renderPagination('paginationControlsAcessorios', 'acessorios', state.totalPages, state.currentPage);
+                container.innerHTML = html;
+                renderPagination('pagContainer', 'acessorios', state.totalPages, page);
 
             } catch (error) {
-                listContainer.innerHTML = `<div class="text-center p-8 text-danger">Erro: ${error.message}</div>`;
+                document.getElementById('listContainer').innerHTML = `<div class="p-4 text-red-500">Erro: ${error.message}</div>`;
             }
         }
 
         async function renderAcessorioForm() {
             const isEditing = state.entityId !== null;
             const content = document.getElementById('content');
-            content.innerHTML = `<div class="text-center p-8 text-slate-500">Carregando formulário...</div>`;
+            content.innerHTML = '<div class="p-8 text-center">Carregando formulário...</div>';
 
-            await Promise.all([fetchAllCarros(), fetchAllFabricantes()]);
+            // Garante que temos os dados para os selects
+            await loadDropdownData();
 
-            let initialData = {};
+            let data = {};
             if (isEditing) {
                 try {
-                    initialData = await apiFetch(`${API_BASE_URL}/acessorios/${state.entityId}`);
+                    data = await apiFetch(`${API_BASE_URL}/acessorios/${state.entityId}`);
                 } catch (e) {
-                    showToast("Erro ao carregar dados.", 'danger');
+                    showToast("Erro ao carregar dados para edição", "danger");
                     return router('acessorios');
                 }
             }
 
-            // Render do Formulário (Mantido similar, apenas garantindo ids únicos e selects seguros)
             content.innerHTML = `
-                <h2 class="text-3xl font-bold mb-6 text-slate-800 border-b pb-2">${isEditing ? 'Editar' : 'Novo'} Acessório</h2>
-                <form id="acessorioForm" class="space-y-4 max-w-2xl mx-auto">
-                    <label class="block">
-                        <span class="text-slate-700">Nome *</span>
-                        <input type="text" id="nome" required class="mt-1 block w-full p-2 border rounded-lg" value="${initialData.nome || ''}">
-                    </label>
-                    <label class="block">
-                        <span class="text-slate-700">Descrição *</span>
-                        <textarea id="descricao" required rows="3" class="mt-1 block w-full p-2 border rounded-lg">${initialData.descricao || ''}</textarea>
-                    </label>
-                    <div class="grid grid-cols-2 gap-4">
-                        <label class="block">
-                            <span class="text-slate-700">Ano Aquisição</span>
-                            <input type="number" id="anoAquisicao" min="1900" class="mt-1 block w-full p-2 border rounded-lg" value="${initialData.anoAquisicao || ''}">
-                        </label>
-                        <label class="block">
-                            <span class="text-slate-700">Valor (R$)</span>
-                            <input type="number" id="valor" step="0.01" class="mt-1 block w-full p-2 border rounded-lg" value="${initialData.valor || ''}">
-                        </label>
-                    </div>
-                    <label class="block">
-                        <span class="text-slate-700">Tempo Instalação (min)</span>
-                        <input type="number" id="tempoInstalacaoMinutos" class="mt-1 block w-full p-2 border rounded-lg" value="${initialData.tempoInstalacaoMinutos || ''}">
-                    </label>
+                <h2 class="text-2xl font-bold mb-6 border-b pb-2">${isEditing ? 'Editar' : 'Novo'} Acessório</h2>
+                <form id="mainForm" class="max-w-2xl mx-auto space-y-4">
                     
-                    <label class="block">
-                        <span class="text-slate-700">Carro Associado</span>
-                        <select id="carroSelect" class="mt-1 block w-full p-2 border rounded-lg">
-                            <option value="">Nenhum</option>
-                            ${state.carros.map(c => `
-                                <option value="${c.id}" ${initialData.carro?.id === c.id ? 'selected' : ''}>
-                                    ${c.modelo} (${c.paisDeMontagem})
-                                </option>`).join('')}
-                        </select>
-                    </label>
+                    <div>
+                        <label class="block text-sm font-bold text-slate-700">Nome *</label>
+                        <input type="text" name="nome" required class="w-full p-2 border rounded focus:ring-2 focus:ring-primary" value="${data.nome || ''}">
+                    </div>
 
-                    <label class="block">
-                        <span class="text-slate-700">Fabricantes (Segure Ctrl para múltiplos)</span>
-                        <select id="fabricantesSelect" multiple size="4" class="mt-1 block w-full p-2 border rounded-lg h-32">
-                            ${state.fabricantes.map(f => `
-                                <option value="${f.id}" ${initialData.fabricantes?.some(ef => ef.id === f.id) ? 'selected' : ''}>
-                                    ${f.nome}
-                                </option>`).join('')}
-                        </select>
-                    </label>
+                    <div>
+                        <label class="block text-sm font-bold text-slate-700">Descrição *</label>
+                        <textarea name="descricao" required rows="3" class="w-full p-2 border rounded focus:ring-2 focus:ring-primary">${data.descricao || ''}</textarea>
+                    </div>
 
-                    <div class="flex justify-end space-x-3 pt-4">
-                        <button type="button" onclick="router('acessorios')" class="bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-lg">Cancelar</button>
-                        <button type="submit" class="bg-primary hover:bg-teal-700 text-white font-bold py-2 px-4 rounded-lg">Salvar</button>
+                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                        <div>
+                            <label class="block text-sm font-bold text-slate-700">Valor (R$)</label>
+                            <input type="number" name="valor" step="0.01" class="w-full p-2 border rounded" value="${data.valor || ''}">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-bold text-slate-700">Ano Aquisição</label>
+                            <input type="number" name="ano" class="w-full p-2 border rounded" value="${data.anoAquisicao || ''}">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-bold text-slate-700">Tempo (min)</label>
+                            <input type="number" name="tempo" class="w-full p-2 border rounded" value="${data.tempoInstalacaoMinutos || ''}">
+                        </div>
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-bold text-slate-700">Carro Associado</label>
+                        <select name="carroId" class="w-full p-2 border rounded bg-white">
+                            <option value="">-- Selecione um Carro --</option>
+                            ${state.carros.map(c => `<option value="${c.id}" ${data.carro?.id === c.id ? 'selected' : ''}>${c.modelo} (${c.paisDeMontagem})</option>`).join('')}
+                        </select>
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-bold text-slate-700">Fabricantes (Segure Ctrl para selecionar vários)</label>
+                        <select name="fabricantesIds" multiple class="w-full p-2 border rounded h-32 bg-white">
+                            ${state.fabricantes.map(f => `<option value="${f.id}" ${data.fabricantes?.some(df => df.id === f.id) ? 'selected' : ''}>${f.nome}</option>`).join('')}
+                        </select>
+                    </div>
+
+                    <div class="flex justify-end space-x-3 pt-4 border-t">
+                        <button type="button" onclick="router('acessorios')" class="px-4 py-2 bg-gray-300 text-slate-800 rounded hover:bg-gray-400">Cancelar</button>
+                        <button type="submit" class="px-4 py-2 bg-primary text-white rounded hover:bg-teal-700 font-bold">Salvar</button>
                     </div>
                 </form>
             `;
 
-            document.getElementById('acessorioForm').addEventListener('submit', async (e) => {
+            document.getElementById('mainForm').onsubmit = async (e) => {
                 e.preventDefault();
-                const form = e.target;
-                
-                // Montagem do Payload
-                const fabricanteIds = Array.from(form.fabricantesSelect.selectedOptions).map(o => parseInt(o.value));
-                const carroId = form.carroSelect.value;
+                const f = e.target;
                 
                 const payload = {
-                    nome: form.nome.value,
-                    descricao: form.descricao.value,
-                    anoAquisicao: form.anoAquisicao.value ? parseInt(form.anoAquisicao.value) : null,
-                    valor: form.valor.value ? parseFloat(form.valor.value) : null,
-                    tempoInstalacaoMinutos: form.tempoInstalacaoMinutos.value ? parseInt(form.tempoInstalacaoMinutos.value) : null,
-                    carro: carroId ? state.carros.find(c => c.id == carroId) : null,
-                    fabricantes: state.fabricantes.filter(f => fabricanteIds.includes(f.id))
+                    nome: f.nome.value,
+                    descricao: f.descricao.value,
+                    valor: f.valor.value ? parseFloat(f.valor.value) : null,
+                    anoAquisicao: f.ano.value ? parseInt(f.ano.value) : null,
+                    tempoInstalacaoMinutos: f.tempo.value ? parseInt(f.tempo.value) : null,
+                    carro: f.carroId.value ? state.carros.find(c => c.id == f.carroId.value) : null,
+                    fabricantes: Array.from(f.fabricantesIds.selectedOptions).map(opt => state.fabricantes.find(fab => fab.id == opt.value))
                 };
-                
-                if(isEditing) payload.id = state.entityId; // Alguns backends exigem o ID no body
 
-                const url = isEditing ? `${API_BASE_URL}/acessorios/${state.entityId}` : `${API_BASE_URL}/acessorios`;
+                if (isEditing) payload.id = state.entityId;
+
                 const method = isEditing ? 'PUT' : 'POST';
+                const url = isEditing ? `${API_BASE_URL}/acessorios/${state.entityId}` : `${API_BASE_URL}/acessorios`;
 
                 try {
                     await apiFetch(url, {
                         method: method,
-                        headers: {'Content-Type': 'application/json'},
+                        headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(payload)
                     });
-                    showToast("Salvo com sucesso!", 'success');
+                    showToast('Salvo com sucesso!', 'success');
                     router('acessorios');
-                } catch (err) {
-                    showToast("Erro ao salvar: " + err.message, 'danger');
+                } catch (error) {
+                    showToast(error.message, 'danger');
                 }
-            });
-        }
-
-        function handleAcessorioDelete(id) {
-            showConfirmationModal('Excluir Acessório', 'Tem certeza?', async () => {
-                try {
-                    await apiFetch(`${API_BASE_URL}/acessorios/${id}`, { method: 'DELETE' });
-                    showToast("Excluído!", 'success');
-                    fetchAcessorios(state.currentPage);
-                } catch (err) {
-                    showToast("Erro ao excluir: " + err.message, 'danger');
-                }
-            });
-        }
-
-        // --- 7. CARROS (Adaptação Simplificada) ---
-        function renderCarrosList(page = 0) {
-            window.updateCarroSearchParams = (p) => {
-                state.search.carros.q = document.getElementById('carroSearchInput').value;
-                fetchCarros(p);
             };
+        }
 
+
+        // =================================================================================
+        // --- MÓDULO: CARROS ---
+        // =================================================================================
+        
+        function renderCarrosList(page = 0) {
             const content = document.getElementById('content');
             content.innerHTML = `
-                <h2 class="text-3xl font-bold mb-6 text-slate-800 border-b pb-2">Carros</h2>
-                <div class="flex gap-4 mb-6">
-                    <input type="text" id="carroSearchInput" placeholder="Modelo..." class="p-3 border rounded-lg flex-grow" value="${state.search.carros.q}">
-                    <button onclick="updateCarroSearchParams(0)" class="bg-primary text-white px-6 rounded-lg font-bold">Buscar</button>
-                    <button onclick="router('carros', 'form')" class="bg-success text-white px-6 rounded-lg font-bold ml-auto">Novo</button>
+                <div class="flex flex-col space-y-4">
+                    <h2 class="text-2xl font-bold text-slate-800 border-b pb-2">Carros</h2>
+                    
+                    <div class="flex gap-2 mb-4">
+                        <input type="text" id="searchCar" class="flex-grow p-2 border rounded" placeholder="Buscar modelo..." value="${state.search.carros.q}">
+                        <button onclick="updateCarSearch()" class="bg-primary text-white px-4 py-2 rounded font-bold">Buscar</button>
+                        <button onclick="router('carros', 'form')" class="bg-success text-white px-4 py-2 rounded font-bold">Novo</button>
+                    </div>
+
+                    <div id="listContainer" class="overflow-x-auto bg-white rounded shadow">Carregando...</div>
+                    <div id="pagContainer" class="flex justify-center pt-4"></div>
                 </div>
-                <div id="carrosListContainer"></div>
-                <div id="paginationControlsCarros" class="flex justify-center gap-2 mt-6"></div>
             `;
+
+            window.updateCarSearch = () => {
+                state.search.carros.q = document.getElementById('searchCar').value;
+                fetchCarros(0);
+            };
             fetchCarros(page);
         }
 
         async function fetchCarros(page) {
             const q = state.search.carros.q;
             const url = `${API_BASE_URL}/carros/search?q=${q}&page=${page}&size=5&sort=modelo&direction=asc`;
-            const container = document.getElementById('carrosListContainer');
-            container.innerHTML = 'Carregando...';
-
+            
             try {
                 const data = await apiFetch(url);
                 const lista = data.Carros || data.content || [];
                 state.totalPages = data.TotalPages || data.totalPages || 1;
+                state.currentPage = page;
 
+                const container = document.getElementById('listContainer');
+                
                 if(lista.length === 0) {
-                    container.innerHTML = 'Nenhum carro encontrado.';
+                    container.innerHTML = '<div class="p-8 text-center">Nada encontrado.</div>';
                     return;
                 }
 
-                let html = `<table class="min-w-full bg-white shadow-md rounded-lg">
-                    <thead><tr class="bg-gray-200 text-sm text-slate-600 uppercase"><th class="p-3 text-left">Modelo</th><th class="p-3 text-left">País</th><th class="p-3 text-left">Ações</th></tr></thead><tbody>`;
-                
+                let html = `<table class="min-w-full"><thead><tr class="bg-gray-100 text-left text-sm uppercase text-slate-600"><th class="p-4">Modelo</th><th class="p-4">País</th><th class="p-4">Versão</th><th class="p-4 text-right">Ações</th></tr></thead><tbody>`;
                 lista.forEach(c => {
                     html += `<tr class="border-b hover:bg-gray-50">
-                        <td class="p-3">${c.modelo}</td>
-                        <td class="p-3">${c.paisDeMontagem}</td>
-                        <td class="p-3 flex gap-2">
+                        <td class="p-4 font-medium">${c.modelo}</td>
+                        <td class="p-4">${c.paisDeMontagem}</td>
+                        <td class="p-4 text-sm text-gray-500">${c.nomeCompletoVersao || '-'}</td>
+                        <td class="p-4 text-right space-x-2">
                             <button onclick="router('carros','form',${c.id})" class="bg-warning text-white px-2 py-1 rounded text-xs">Editar</button>
-                            <button onclick="handleCarroDelete(${c.id})" class="bg-danger text-white px-2 py-1 rounded text-xs">Excluir</button>
+                            <button onclick="deleteItem('carros', ${c.id}, fetchCarros)" class="bg-danger text-white px-2 py-1 rounded text-xs">Excluir</button>
                         </td></tr>`;
                 });
-                html += '</tbody></table>';
-                container.innerHTML = html;
-                renderPagination('paginationControlsCarros', 'carros', state.totalPages, page);
-            } catch (err) {
-                container.innerHTML = 'Erro ao buscar carros.';
+                container.innerHTML = html + '</tbody></table>';
+                renderPagination('pagContainer', 'carros', state.totalPages, page);
+            } catch(e) {
+                document.getElementById('listContainer').innerHTML = `<div class="p-4 text-red-500">${e.message}</div>`;
             }
         }
 
@@ -530,36 +522,40 @@
             content.innerHTML = 'Carregando...';
 
             let data = { fichaTecnica: {} };
-            if(isEditing) {
+            if (isEditing) {
                 try {
                     data = await apiFetch(`${API_BASE_URL}/carros/${state.entityId}`);
                     data.fichaTecnica = data.fichaTecnica || {};
-                } catch(e) { router('carros'); return; }
+                } catch (e) { router('carros'); return; }
             }
 
             content.innerHTML = `
-                <h2 class="text-3xl font-bold mb-6">${isEditing ? 'Editar' : 'Novo'} Carro</h2>
-                <form id="carroForm" class="space-y-4 max-w-3xl mx-auto">
-                    <div class="grid grid-cols-2 gap-4">
-                        <label class="block"><span>Modelo *</span><input type="text" name="modelo" required class="w-full p-2 border rounded" value="${data.modelo||''}"></label>
-                        <label class="block"><span>País *</span><input type="text" name="pais" required class="w-full p-2 border rounded" value="${data.paisDeMontagem||''}"></label>
-                        <label class="block"><span>Versão Completa</span><input type="text" name="versao" class="w-full p-2 border rounded" value="${data.nomeCompletoVersao||''}"></label>
+                <h2 class="text-2xl font-bold mb-6">${isEditing ? 'Editar' : 'Novo'} Carro</h2>
+                <form id="carForm" class="max-w-3xl mx-auto space-y-6">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <label class="block"><span>Modelo *</span><input required name="modelo" class="w-full p-2 border rounded" value="${data.modelo||''}"></label>
+                        <label class="block"><span>País de Montagem *</span><input required name="pais" class="w-full p-2 border rounded" value="${data.paisDeMontagem||''}"></label>
+                        <label class="block"><span>Versão Completa</span><input name="versao" class="w-full p-2 border rounded" value="${data.nomeCompletoVersao||''}"></label>
                         <label class="block"><span>Data Fabricação</span><input type="date" name="dataFab" class="w-full p-2 border rounded" value="${formatDateForInput(data.dataDeFabricacao)}"></label>
                     </div>
-                    <div class="bg-gray-50 p-4 rounded border">
-                        <h3 class="font-bold mb-2">Ficha Técnica</h3>
-                        <label class="block mb-2"><span>Motor</span><input type="text" name="motor" class="w-full p-2 border rounded" value="${data.fichaTecnica.detalhesDoMotor||''}"></label>
-                        <label class="block mb-2"><span>Combustível</span><input type="text" name="combustivel" class="w-full p-2 border rounded" value="${data.fichaTecnica.tipoDeCombustivel||''}"></label>
-                        <label class="block"><span>Opcionais</span><textarea name="opcionais" class="w-full p-2 border rounded">${data.fichaTecnica.opcionaisDeFabrica||''}</textarea></label>
+                    
+                    <div class="bg-slate-50 p-4 rounded border border-slate-200">
+                        <h3 class="font-bold text-slate-700 mb-3">Ficha Técnica</h3>
+                        <div class="space-y-3">
+                            <label class="block"><span>Motor</span><input name="motor" class="w-full p-2 border rounded" value="${data.fichaTecnica.detalhesDoMotor||''}"></label>
+                            <label class="block"><span>Combustível</span><input name="combustivel" class="w-full p-2 border rounded" value="${data.fichaTecnica.tipoDeCombustivel||''}"></label>
+                            <label class="block"><span>Opcionais</span><textarea name="opcionais" class="w-full p-2 border rounded">${data.fichaTecnica.opcionaisDeFabrica||''}</textarea></label>
+                        </div>
                     </div>
-                    <div class="flex justify-end gap-2">
-                        <button type="button" onclick="router('carros')" class="bg-gray-400 text-white px-4 py-2 rounded">Cancelar</button>
-                        <button type="submit" class="bg-primary text-white px-4 py-2 rounded">Salvar</button>
+
+                    <div class="flex justify-end space-x-3">
+                        <button type="button" onclick="router('carros')" class="px-4 py-2 bg-gray-300 rounded">Cancelar</button>
+                        <button type="submit" class="px-4 py-2 bg-primary text-white rounded font-bold">Salvar</button>
                     </div>
                 </form>
             `;
 
-            document.getElementById('carroForm').onsubmit = async (e) => {
+            document.getElementById('carForm').onsubmit = async (e) => {
                 e.preventDefault();
                 const f = e.target;
                 const payload = {
@@ -573,74 +569,64 @@
                         opcionaisDeFabrica: f.opcionais.value
                     }
                 };
-                if(isEditing) payload.id = state.entityId;
+                if (isEditing) payload.id = state.entityId;
 
                 try {
                     await apiFetch(isEditing ? `${API_BASE_URL}/carros/${state.entityId}` : `${API_BASE_URL}/carros`, {
                         method: isEditing ? 'PUT' : 'POST',
-                        headers: {'Content-Type':'application/json'},
+                        headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(payload)
                     });
-                    showToast('Sucesso!', 'success');
+                    showToast('Salvo!', 'success');
                     router('carros');
-                } catch(err) { showToast(err.message, 'danger'); }
+                } catch (err) { showToast(err.message, 'danger'); }
             };
         }
 
-        function handleCarroDelete(id) {
-             showConfirmationModal('Excluir Carro', 'Isso pode falhar se houver acessórios vinculados.', async () => {
-                try {
-                    await apiFetch(`${API_BASE_URL}/carros/${id}`, { method: 'DELETE' });
-                    showToast("Excluído!", 'success');
-                    fetchCarros(state.currentPage);
-                } catch (err) {
-                    showToast(err.message, 'danger'); // Mostra erro 409 se houver
-                }
-            });
-        }
 
-        // --- 8. FABRICANTES (Mantido estrutura similar) ---
+        // =================================================================================
+        // --- MÓDULO: FABRICANTES ---
+        // =================================================================================
+        
         function renderFabricantesList(page = 0) {
-            window.updateFabricanteSearchParams = (p) => {
-                state.search.fabricantes.q = document.getElementById('fabSearchInput').value;
-                fetchFabricantes(p);
-            };
-            document.getElementById('content').innerHTML = `
-                <h2 class="text-3xl font-bold mb-6 text-slate-800 border-b pb-2">Fabricantes</h2>
-                <div class="flex gap-4 mb-6">
-                    <input type="text" id="fabSearchInput" placeholder="Nome..." class="p-3 border rounded-lg flex-grow" value="${state.search.fabricantes.q}">
-                    <button onclick="updateFabricanteSearchParams(0)" class="bg-primary text-white px-6 rounded-lg font-bold">Buscar</button>
-                    <button onclick="router('fabricantes', 'form')" class="bg-success text-white px-6 rounded-lg font-bold ml-auto">Novo</button>
+            const content = document.getElementById('content');
+            content.innerHTML = `
+                <h2 class="text-2xl font-bold mb-4 border-b pb-2">Fabricantes</h2>
+                <div class="flex gap-2 mb-4">
+                    <input type="text" id="searchFab" class="flex-grow p-2 border rounded" placeholder="Nome..." value="${state.search.fabricantes.q}">
+                    <button onclick="updateFabSearch()" class="bg-primary text-white px-4 py-2 rounded font-bold">Buscar</button>
+                    <button onclick="router('fabricantes', 'form')" class="bg-success text-white px-4 py-2 rounded font-bold">Novo</button>
                 </div>
-                <div id="fabListContainer"></div>
-                <div id="paginationControlsFabricantes" class="flex justify-center gap-2 mt-6"></div>
+                <div id="listContainer" class="bg-white rounded shadow">Carregando...</div>
+                <div id="pagContainer" class="flex justify-center pt-4"></div>
             `;
+            window.updateFabSearch = () => { state.search.fabricantes.q = document.getElementById('searchFab').value; fetchFabricantes(0); };
             fetchFabricantes(page);
         }
 
         async function fetchFabricantes(page) {
             const q = state.search.fabricantes.q;
             const url = `${API_BASE_URL}/fabricantes/search?q=${q}&page=${page}&size=5&sort=nome&direction=asc`;
-            const container = document.getElementById('fabListContainer');
-            
             try {
                 const data = await apiFetch(url);
                 const lista = data.Fabricantes || data.content || [];
                 state.totalPages = data.TotalPages || data.totalPages || 1;
+                state.currentPage = page;
 
-                if(lista.length === 0) { container.innerHTML = 'Nada encontrado.'; return; }
+                const container = document.getElementById('listContainer');
+                if(lista.length === 0) { container.innerHTML = '<div class="p-4 text-center">Vazio</div>'; return; }
 
-                let html = `<table class="min-w-full bg-white rounded shadow"><thead><tr class="bg-gray-200 text-slate-600 uppercase text-sm"><th class="p-3 text-left">Nome</th><th class="p-3 text-left">Detalhes</th><th class="p-3 text-left">Ações</th></tr></thead><tbody>`;
+                let html = `<table class="min-w-full"><thead><tr class="bg-gray-100 text-left text-sm uppercase text-slate-600"><th class="p-4">Nome</th><th class="p-4">Detalhes</th><th class="p-4 text-right">Ações</th></tr></thead><tbody>`;
                 lista.forEach(f => {
-                    html += `<tr class="border-b hover:bg-gray-50"><td class="p-3">${f.nome}</td><td class="p-3">${f.detalhes||'-'}</td>
-                    <td class="p-3 flex gap-2">
+                    html += `<tr class="border-b hover:bg-gray-50"><td class="p-4 font-medium">${f.nome}</td><td class="p-4 text-sm text-gray-500">${f.detalhes||''}</td>
+                    <td class="p-4 text-right space-x-2">
                         <button onclick="router('fabricantes','form',${f.id})" class="bg-warning text-white px-2 py-1 rounded text-xs">Editar</button>
-                        <button onclick="handleFabricanteDelete(${f.id})" class="bg-danger text-white px-2 py-1 rounded text-xs">Excluir</button>
+                        <button onclick="deleteItem('fabricantes', ${f.id}, fetchFabricantes)" class="bg-danger text-white px-2 py-1 rounded text-xs">Excluir</button>
                     </td></tr>`;
                 });
                 container.innerHTML = html + '</tbody></table>';
-                renderPagination('paginationControlsFabricantes', 'fabricantes', state.totalPages, page);
-            } catch(e) { container.innerHTML = 'Erro ao carregar.'; }
+                renderPagination('pagContainer', 'fabricantes', state.totalPages, page);
+            } catch(e) { document.getElementById('listContainer').innerHTML = `<div class="text-red-500 p-4">${e.message}</div>`; }
         }
 
         async function renderFabricanteForm() {
@@ -651,13 +637,13 @@
                 catch(e) { router('fabricantes'); return; }
             }
             document.getElementById('content').innerHTML = `
-                <h2 class="text-3xl font-bold mb-6">${isEditing?'Editar':'Novo'} Fabricante</h2>
+                <h2 class="text-2xl font-bold mb-6">${isEditing?'Editar':'Novo'} Fabricante</h2>
                 <form id="fabForm" class="max-w-lg mx-auto space-y-4">
                     <label class="block"><span>Nome *</span><input required name="nome" class="w-full p-2 border rounded" value="${data.nome||''}"></label>
-                    <label class="block"><span>Detalhes</span><textarea name="detalhes" class="w-full p-2 border rounded">${data.detalhes||''}</textarea></label>
-                    <div class="flex justify-end gap-2 pt-4">
-                        <button type="button" onclick="router('fabricantes')" class="bg-gray-400 text-white px-4 py-2 rounded">Cancelar</button>
-                        <button type="submit" class="bg-primary text-white px-4 py-2 rounded">Salvar</button>
+                    <label class="block"><span>Detalhes</span><textarea name="detalhes" rows="3" class="w-full p-2 border rounded">${data.detalhes||''}</textarea></label>
+                    <div class="flex justify-end space-x-3 pt-4">
+                        <button type="button" onclick="router('fabricantes')" class="px-4 py-2 bg-gray-300 rounded">Cancelar</button>
+                        <button type="submit" class="px-4 py-2 bg-primary text-white rounded font-bold">Salvar</button>
                     </div>
                 </form>
             `;
@@ -667,22 +653,29 @@
                 if(isEditing) payload.id = state.entityId;
                 try {
                     await apiFetch(isEditing?`${API_BASE_URL}/fabricantes/${state.entityId}`:`${API_BASE_URL}/fabricantes`, {
-                        method: isEditing?'PUT':'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)
+                        method: isEditing?'PUT':'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)
                     });
                     showToast('Salvo!', 'success'); router('fabricantes');
                 } catch(err) { showToast(err.message, 'danger'); }
             };
         }
 
-        function handleFabricanteDelete(id) {
-            showConfirmationModal('Excluir', 'Confirmar?', async() => {
-                try { await apiFetch(`${API_BASE_URL}/fabricantes/${id}`, {method:'DELETE'}); showToast('Excluído','success'); fetchFabricantes(state.currentPage); }
-                catch(e) { showToast(e.message, 'danger'); }
+        // --- FUNÇÃO DELETAR GENÉRICA ---
+        function deleteItem(type, id, refreshCallback) {
+            showConfirmationModal('Confirmar Exclusão', 'Tem certeza que deseja excluir este item?', async () => {
+                try {
+                    await apiFetch(`${API_BASE_URL}/${type}/${id}`, { method: 'DELETE' });
+                    showToast('Item excluído com sucesso.', 'success');
+                    refreshCallback(state.currentPage);
+                } catch (error) {
+                    showToast(error.message, 'danger');
+                }
             });
         }
 
         // --- INICIALIZAÇÃO ---
         window.onload = () => router('acessorios');
+
     </script>
 </body>
 </html>
